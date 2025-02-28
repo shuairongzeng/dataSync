@@ -40,7 +40,7 @@ public class DatabaseSyncService {
             for (Map<String, String> table : tables) {
                 String tableName = table.get("TABLE_NAME");
                 String tableComment = table.get("COMMENTS");
-                if (!tableName.equalsIgnoreCase("H2000_ENTRY_WORKFLOW")) {
+                if (!tableName.equalsIgnoreCase("TL_STRUCKRULE")) {
                     continue;
                 }
                 try {

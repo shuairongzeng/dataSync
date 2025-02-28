@@ -9,21 +9,27 @@ import org.apache.ibatis.session.SqlSessionFactory;
 //@SpringBootApplication
 public class DbsyncApplication {
     public static void main(String[] args) {
-        // Oracle数据库配置 portal库
-        //        SqlSessionFactory sourceFactory = DatabaseConfig.getOracleSessionFactory(
-        //                "jdbc:oracle:thin:@192.168.107.101:1524/orcl",
-        //                "PD1_CQSW_PORTAL",
-        //                "PD1_CQSW_PORTAL_1qaz2024"
-        //        );
-
-//    oracle数据库配置 shard库
+        /**
+         * Oracle数据库配置 portal库
+         */
         SqlSessionFactory sourceFactory = DatabaseConfig.getOracleSessionFactory(
-                "jdbc:oracle:thin:@192.168.107.101:1523/orcl",
-                "CQ1_CQSW_SHARE_QUERY",
-                "CQSW_SHARE_QUERY_2wsx"
+                "jdbc:oracle:thin:@192.168.107.101:1524/orcl",
+                "PD1_CQSW_PORTAL",
+                "PD1_CQSW_PORTAL_1qaz2024"
         );
 
-        // PostgreSQL数据库配置
+/**
+ * oracle数据库配置 shard库
+ */
+//        SqlSessionFactory sourceFactory = DatabaseConfig.getOracleSessionFactory(
+//                "jdbc:oracle:thin:@192.168.107.101:1523/orcl",
+//                "CQ1_CQSW_SHARE_QUERY",
+//                "CQSW_SHARE_QUERY_2wsx"
+//        );
+
+        /**
+         * PostgreSQL数据库配置
+         */
         SqlSessionFactory targetFactory = DatabaseConfig.getPgSessionFactory(
                 "jdbc:postgresql://192.168.106.103:5432/cq1_test",
                 "cq1_cqsw_portal",
