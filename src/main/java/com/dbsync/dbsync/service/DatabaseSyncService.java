@@ -6,11 +6,11 @@ import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.sql.Date;
-import java.sql.SQLException;
-import java.sql.Timestamp;
+import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -40,7 +40,7 @@ public class DatabaseSyncService {
             for (Map<String, String> table : tables) {
                 String tableName = table.get("TABLE_NAME");
                 String tableComment = table.get("COMMENTS");
-                if (!tableName.equalsIgnoreCase("TL_STRUCKRULE")) {
+                if (!tableName.equalsIgnoreCase("sys_data_help")) {
                     continue;
                 }
                 try {
@@ -255,7 +255,6 @@ public class DatabaseSyncService {
 
             while (processedCount < totalCount) {
                 long offset = (page.getCurrent() - 1) * batchSize;  // 计算偏移量
-//                List<Map<String, Object>> data = sourceMapper.getTableData(tableName);
                 // 分页查询数据
                 List<Map<String, Object>> data = sourceMapper.getTableDataWithPagination(page.getCurrent(), batchSize, tableName);
 
@@ -263,22 +262,26 @@ public class DatabaseSyncService {
                     break;
                 }
 
-
                 // 处理数据中的null值和特殊字符
-                for (Map<String, Object> row : data) {
-                    for (Map.Entry<String, Object> entry : row.entrySet()) {
-                        if (entry.getValue() instanceof String) {
-                            // 替换特殊字符
-                            String value = (String) entry.getValue();
-                            entry.setValue(value.replace("'", "''"));
-                        }
-                    }
-                }
-
-                String insertSql = generateBatchInsertSql(tableName.toLowerCase(), data);
+//                for (Map<String, Object> row : data) {
+//                    for (Map.Entry<String, Object> entry : row.entrySet()) {
+//                        if (entry.getValue() instanceof String) {
+//                            // 替换特殊字符
+//                            String value = (String) entry.getValue();
+//                            entry.setValue(value
+//                                    .replace("'", "''")
+//                                    .replace("?","??")
+////                                    .replace("{","777")
+////                                    .replace("}","888")
+//                                    .replace("#","\u0023")
+//                                    );
+//                        }
+//                    }
+//                }
+                String insertSql = generateBatchInsertSql(targetMapper, tableName.toLowerCase(), data);
 
                 try {
-                    targetMapper.executeDML(insertSql);
+//                    targetMapper.executeDDL(insertSql);
                     processedCount += data.size();
                     logger.info("表 {} 同步进度: {}/{}", tableName, processedCount, totalCount);
                 } catch (Exception e) {
@@ -296,10 +299,16 @@ public class DatabaseSyncService {
         }
     }
 
-    private String generateBatchInsertSql(String tableName, List<Map<String, Object>> data) {
+    private static final String POSTGRES_JDBC_URL = "jdbc:postgresql://192.168.106.103:5432/pt1_eci_cqdm";
+    private static final String POSTGRES_USERNAME = "cqdm_basic";
+    private static final String POSTGRES_PASSWORD = "cqdm_basic_1qaz";
+    private static final String POSTGRES_TABLE_NAME = "your_table_name"; // 确保与创建的表名一致
+
+    private String generateBatchInsertSql(TableMapper targetMapper, String tableName, List<Map<String, Object>> data) {
         if (data.isEmpty()) {
             return "";
         }
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(targetFactory.getConfiguration().getEnvironment().getDataSource());
 
         StringBuilder sql = new StringBuilder();
         sql.append("INSERT INTO ").append(tableName).append(" (");
@@ -316,62 +325,84 @@ public class DatabaseSyncService {
                 .map(String::toLowerCase)
                 .collect(Collectors.toList())));
 
-        sql.append(") VALUES ");
+        sql.append(") VALUES ").append("(");
 
+        String placeholders = columns.stream()
+                .map(column -> "?")
+                .collect(Collectors.joining(","));
+
+        sql.append(placeholders).append(")");
+
+        // 参数列表（按顺序对应占位符?）
+        Object[] params = new Object[columns.size()];
+// 手动展开参数数组
+        Map<String, Object> paramMap = new HashMap<>();
+        paramMap.put("sql", sql.toString());
         // 添加值
-        for (int i = 0; i < data.size(); i++) {
-            Map<String, Object> row = data.get(i);
-            sql.append("(");
+//        for (int i = 0; i < data.size(); i++) {
+//            Map<String, Object> row = data.get(i);
+//
+//            for (int j = 0; j < columns.size(); j++) {
+//                String column = columns.get(j);
+//                Object value = row.get(column);
+//                params[j] = value;
+//
+//                paramMap.put("p" + j, params[j]);  // p0, p1, ..., p9
+//            }
+////
+//            paramMap.put("params", params);
+//        }
 
-            for (int j = 0; j < columns.size(); j++) {
-                String column = columns.get(j);
-                Object value = row.get(column);
+        Object[] params1 = {
+                "BASE_COUNTRY",                 // QUERY_KEY
+                "国别基础信息",                   // BASE_COMMENT
+                "tgroot",                       // CREATE_USER
+                "10",                           // TG_PAGE_SIZE
+                "tgroot",                       // UPDATE_USER
+                "N",                            // USE_CACHE
+                "5da14f08-9cd3-464a-9d68-6dfd07cdb005", // ID
+                new Timestamp(System.currentTimeMillis()), // CREATE_TIME (您截图中是 2025-03-17 14:27:56.0)
+                new Timestamp(System.currentTimeMillis()), // UPDATE_TIME (您截图中是 2025-03-17 15:16:26.0)
+                "SELECT GUID AS CODE,CH_NAME AS NAME FROM FZGJ_BD_COUNTRY WHERE 1=1" // SQL_COMMAND
+        };
+//            targetMapper.executeDynamicSQL(sql.toString(), params1);
 
-                // 处理不同类型的值
-                if (value == null) {
-                    sql.append("NULL");
-                } else if (value.getClass().getName().equals("oracle.sql.CLOB")) {
-                    try {
-                        // 将Oracle CLOB转换为字符串
-                        oracle.sql.CLOB clob = (oracle.sql.CLOB) value;
-                        String clobValue = clob.stringValue();
-                        // 转义单引号并处理特殊字符
-                        clobValue = clobValue.replace("'", "''")
-                                .replace("\r", "\\r")
-                                .replace("\n", "\\n");
-                        sql.append("'").append(clobValue).append("'");
-                    } catch (SQLException e) {
-                        // 如果CLOB读取失败，插入空字符串
-                        sql.append("''");
-                        logger.error("Failed to read CLOB value", e);
-                    }
-                } else if (value instanceof String) {
-                    // 转义单引号，防止SQL注入
-                    sql.append("'").append(((String) value).replace("'", "''")).append("'");
-                } else if (value instanceof Date) {
-                    sql.append("'").append(new Timestamp(((Date) value).getTime())).append("'");
-                } else if (value instanceof Timestamp) {
-                    sql.append("'").append(value).append("'");
-                } else if (value instanceof Boolean) {
-                    sql.append(((Boolean) value) ? "true" : "false");
+
+        try {
+            Connection postgresConnection = DriverManager.getConnection(POSTGRES_JDBC_URL, POSTGRES_USERNAME, POSTGRES_PASSWORD);
+            PreparedStatement postgresStatement = postgresConnection.prepareStatement(sql.toString());
+
+
+            for (int i = 0; i < params1.length; i++) {
+                Object param = params1[i];
+                int parameterIndex = i + 1; // PreparedStatement 的参数索引从 1 开始
+
+                if (param instanceof String) {
+                    postgresStatement.setString(parameterIndex, (String) param);
+                } else if (param instanceof Integer) {
+                    postgresStatement.setInt(parameterIndex, (Integer) param);
+                } else if (param instanceof Long) {
+                    postgresStatement.setLong(parameterIndex, (Long) param);
+                } else if (param instanceof Timestamp) {
+                    postgresStatement.setTimestamp(parameterIndex, (Timestamp) param);
                 } else {
-                    sql.append(value);
-                }
-
-                if (j < columns.size() - 1) {
-                    sql.append(", ");
+                    // 可以添加其他类型判断，例如 BigDecimal, Boolean 等
+                    // 对于不确定的类型，可以尝试使用 setObject
+                    postgresStatement.setObject(parameterIndex, param);
                 }
             }
 
-            sql.append(")");
-            if (i < data.size() - 1) {
-                sql.append(", ");
-            }
+            int rowsAffected = postgresStatement.executeUpdate();
+            System.out.println("成功插入 " + rowsAffected + " 行数据。");
+
+
+        } catch (SQLException ex) {
+            throw new RuntimeException(ex);
         }
+
 
         return sql.toString();
     }
-
 
 //    private String generateBatchInsertSql(String tableName, List<Map<String, Object>> data) {
 //        if (data.isEmpty()) {

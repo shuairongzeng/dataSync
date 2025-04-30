@@ -13,9 +13,9 @@ public class DbsyncApplication {
          * Oracle数据库配置 portal库
          */
         SqlSessionFactory sourceFactory = DatabaseConfig.getOracleSessionFactory(
-                "jdbc:oracle:thin:@192.168.107.101:1524/orcl",
-                "PD1_CQSW_PORTAL",
-                "PD1_CQSW_PORTAL_1qaz2024"
+                "jdbc:oracle:thin:@192.168.107.101:1525/orcl",
+                "PT1_ECI_CQDM",
+                "ecidh.com2024"
         );
 
 /**
@@ -31,9 +31,9 @@ public class DbsyncApplication {
          * PostgreSQL数据库配置
          */
         SqlSessionFactory targetFactory = DatabaseConfig.getPgSessionFactory(
-                "jdbc:postgresql://192.168.106.103:5432/cq1_test",
-                "cq1_cqsw_portal",
-                "cq1_cqsw_portal_1qaz"
+                "jdbc:postgresql://192.168.106.103:5432/pt1_eci_cqdm",
+                "cqdm_basic",
+                "cqdm_basic_1qaz"
         );
 
         // 创建同步服务实例，设置是否在同步前清空目标表

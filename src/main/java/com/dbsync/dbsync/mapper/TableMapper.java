@@ -1,9 +1,8 @@
 package com.dbsync.dbsync.mapper;
 
 
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import com.dbsync.dbsync.service.BatchInsertSqlProvider;
+import org.apache.ibatis.annotations.*;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page; // 导入 Page 类
 
 import java.util.List;
@@ -11,6 +10,20 @@ import java.util.Map;
 
 public interface TableMapper {
 
+    /**
+     * 执行动态SQL
+     * @param sql
+     * @param params
+     */
+    @Insert("${sql}")
+    void executeDynamicSQL(
+            @Param("sql") String sql,
+            @Param("params") Object[] params  // 显式命名参数数组
+    );
+
+
+    @InsertProvider(type = BatchInsertSqlProvider.class, method = "generateBatchInsertSql")
+    void executeBatchInsert(@Param("tableName") String tableName, @Param("data") List<Map<String, Object>> data);
 
     /**
      * Oracle数据库分页获取表数据
@@ -27,8 +40,6 @@ public interface TableMapper {
     List<Map<String, Object>> getTableDataWithPagination(@Param("current") Long current,
                                                          @Param("size") Long size,
                                                          @Param("tableName") String tableName);
-
-
 
     /**
      * 添加执行DDL的方法
