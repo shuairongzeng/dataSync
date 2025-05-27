@@ -26,20 +26,12 @@ public interface TableMapper {
     void executeBatchInsert(@Param("tableName") String tableName, @Param("data") List<Map<String, Object>> data);
 
     /**
-     * Oracle数据库分页获取表数据
-     * @param current 分页参数
-     * @param size 每页大小
-     * @param tableName 表名
-     * @return 分页数据
+     * Database-agnostic pagination.
+     * Parameters 'current', 'size', 'tableName', 'dbType', 'schemaName' (optional), 'orderByColumn' (optional for SQLServer)
+     * must be passed in a Map due to provider method signature limitations with multiple params.
      */
-    @Select("SELECT * FROM (" +
-            "  SELECT a.*, ROWNUM rnum FROM (" +
-            "    SELECT * FROM ${tableName}" +
-            "  ) a WHERE ROWNUM <= #{current} * #{size}" +
-            ") WHERE rnum > (#{current} - 1) * #{size}")
-    List<Map<String, Object>> getTableDataWithPagination(@Param("current") Long current,
-                                                         @Param("size") Long size,
-                                                         @Param("tableName") String tableName);
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "getTableDataWithPagination")
+    List<Map<String, Object>> getTableDataWithPagination(Map<String, Object> params);
 
     /**
      * 添加执行DDL的方法
@@ -59,24 +51,28 @@ public interface TableMapper {
      * 获取所有表的注释
      * @return
      */
-    @Select("SELECT table_name, comments FROM user_tab_comments")
-    List<Map<String, String>> getAllTableComments();
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "getAllTableComments")
+    List<Map<String, String>> getAllTableComments(@Param("dbType") String dbType, @Param("schemaName") String schemaName);
 
     /**
      * 获取指定表的列注释
-     * @param tableName
-     * @return
+     * @param dbType Database type (e.g., "oracle", "postgresql")
+     * @param tableName Name of the table
+     * @param schemaName Optional schema name; may be null
+     * @return List of column comments
      */
-    @Select("SELECT column_name, comments FROM user_col_comments WHERE table_name = #{tableName}")
-    List<Map<String, String>> getColumnComments(String tableName);
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "getColumnComments")
+    List<Map<String, String>> getColumnComments(@Param("dbType") String dbType, @Param("tableName") String tableName, @Param("schemaName") String schemaName);
 
     /**
      * 获取指定表的结构信息
-     * @param tableName
-     * @return
+     * @param dbType Database type
+     * @param tableName Name of the table
+     * @param schemaName Optional schema name
+     * @return List of column structures
      */
-    @Select("SELECT column_name, data_type, data_length, nullable FROM user_tab_columns WHERE table_name = #{tableName}")
-    List<Map<String, Object>> getTableStructure(String tableName);
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "getTableStructure")
+    List<Map<String, Object>> getTableStructure(@Param("dbType") String dbType, @Param("tableName") String tableName, @Param("schemaName") String schemaName);
 
     /**
      * 获取指定表的数据
@@ -91,29 +87,26 @@ public interface TableMapper {
      * @param tableName
      * @return
      */
-    @Select("SELECT COUNT(*) FROM user_tables WHERE table_name = #{tableName}")
-    int checkOracleTableExists(String tableName);
+    // The checkTableExists logic will be handled in DatabaseSyncService using dbType-specific queries
+    // or by attempting to query metadata and catching exceptions if necessary.
+    // For simplicity, removing checkOracleTableExists and checkPgTableExists from here.
+    // The service layer can call getTableStructure or similar and check for empty result/exception.
 
     /**
-     * PostgreSQL检查表是否存在
-     * @param tableName
-     * @return
-     */
-    @Select("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = lower(#{tableName}) AND table_schema = current_schema()")
-    int checkPgTableExists(String tableName);
-
-    /**
-     * 清空表数据
+     * 清空表数据 - This is generally cross-database, but TRUNCATE might need specific permissions.
+     * Using ${tableName} is fine as it's controlled internally.
      * @param tableName
      */
-    @Select("TRUNCATE TABLE ${tableName}")
+    @Update("TRUNCATE TABLE ${tableName}")
     void truncateTable(String tableName);
 
     /**
      * 获取表的总记录数
-     * @param tableName
-     * @return
+     * @param dbType Database type
+     * @param tableName Name of the table
+     * @param schemaName Optional schema name
+     * @return Total number of rows
      */
-    @Select("SELECT COUNT(*) FROM ${tableName}")
-    long getTableCount(String tableName);
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "getTableCount")
+    long getTableCount(@Param("dbType") String dbType, @Param("tableName") String tableName, @Param("schemaName") String schemaName);
 }
