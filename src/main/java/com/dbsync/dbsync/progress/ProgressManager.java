@@ -18,7 +18,7 @@ public class ProgressManager {
         TaskProgress taskProgress = tasks.computeIfAbsent(taskId, id -> new TaskProgress(id, totalTables));
         taskProgress.setStartTime(LocalDateTime.now());
         taskProgress.setStatus(TaskStatus.RUNNING);
-        logger.info("Task [{}] started. Total tables to sync: {}.", taskId, totalTables);
+        logger.info("Task [{}] started with {} tables to process", taskId, totalTables);
     }
 
     public void startTableSync(String taskId, String tableName, long sourceRecordCount) {

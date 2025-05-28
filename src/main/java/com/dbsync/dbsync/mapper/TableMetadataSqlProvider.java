@@ -3,8 +3,11 @@ package com.dbsync.dbsync.mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.jdbc.SQL;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class TableMetadataSqlProvider {
+    private static final Logger logger = LoggerFactory.getLogger(TableMetadataSqlProvider.class);
 
     public String getAllTableComments(@Param("dbType") String dbType, @Param("schemaName") String schemaName) {
         // schemaName might be null or not applicable for all DBs (e.g. MySQL default schema)
@@ -162,11 +165,10 @@ public class TableMetadataSqlProvider {
         switch (dbType.toLowerCase()) {
             case "oracle":
             case "dameng":
-                return "SELECT " + columns + " FROM (" +
-                       "  SELECT q_.*, ROWNUM rnum_ FROM (" +
-                       "    SELECT " + columns + " FROM " + tableName + // Qualify tableName with schemaName if needed
-                       "  ) q_ WHERE ROWNUM <= " + (current * size) +
-                       ") WHERE rnum_ > " + offset;
+                // 使用子查询来确保只选择原始列
+                return "WITH numbered_rows AS (" +
+                       "  SELECT a.*, ROW_NUMBER() OVER (ORDER BY 1) as rn FROM " + tableName + " a" +
+                       ") SELECT " + columns + " FROM numbered_rows WHERE rn > " + offset + " AND rn <= " + (offset + size);
             case "postgresql":
             case "vastbase":
             case "mysql": // MySQL also uses LIMIT OFFSET
@@ -174,53 +176,29 @@ public class TableMetadataSqlProvider {
                        " LIMIT " + size + " OFFSET " + offset;
             case "sqlserver":
                 // SQL Server requires an ORDER BY clause for OFFSET FETCH.
-                // This is a placeholder; a robust solution needs a way to determine a default sort column.
-                // Or, the caller must provide sort columns.
-                // This example assumes a column named 'PRIMARY_KEY_COLUMN' exists or some other default.
-                // This part is highly dependent on table structure or additional parameters.
                 String orderBy = (String) params.getOrDefault("orderByColumn", null);
                 if (orderBy == null || orderBy.isEmpty()) {
-                    // Attempt to get first column as a fallback for ORDER BY
-                    // This is a HACK and might not be efficient or correct for all tables.
-                    // A proper solution would require knowing a sortable column.
-                    // For now, this part is problematic without a guaranteed sort key.
-                    // Let's assume a generic primary key or first column for now.
-                    // This is non-trivial to get dynamically in a provider without more info.
-                    // Forcing a placeholder:
-                    // throw new IllegalArgumentException("SQL Server pagination requires an ORDER BY clause. Please specify 'orderByColumn'.");
-                    // A less intrusive but potentially incorrect fallback:
-                    // orderBy = "(SELECT NULL)"; // This is invalid SQL for ORDER BY
-                    // The safest here is to acknowledge this limitation.
-                    // For now, let's assume the first column of the table is used for ordering,
-                    // which is NOT a good general assumption. A better approach involves passing sort order.
-                    // The SQL below will likely fail without a valid ORDER BY clause.
-                    // A common pattern is to require an ORDER BY, or to use a specific column like the PK.
-                    // This needs to be determined from `params` or table metadata.
-                    // For the purpose of this exercise, I'll make a big assumption or leave it to fail.
-                    // Better: the calling code should determine a sort key.
-                    // String defaultSortKey = (String) params.get("defaultSortKey");
-                    // if(defaultSortKey == null) throw new IllegalArgumentException("SQL Server requires an ORDER BY clause for pagination.");
-                    // For now, this will be a simplified, potentially non-working version for SQL Server
-                    // without a defined order by column.
-                     logger.warn("SQL Server pagination is used without an explicit ORDER BY clause. This might lead to unpredictable results or errors. Please provide an 'orderByColumn' parameter.");
-                     // A common, but not guaranteed, workaround is to order by (SELECT NULL) if no other column is available,
-                     // but this is not universally supported or correct.
-                     // The most robust way is to require an orderByColumn.
-                     // For now, let's assume the caller must ensure the table has a PK or provide one.
-                     // Let's assume a placeholder like 'id' or the first column. This is not implemented here.
-                     // A simple but possibly failing version:
-                     return "SELECT " + columns + " FROM " + tableName + // Qualify if needed
-                            " ORDER BY (SELECT NULL) " + // THIS IS A POTENTIAL ISSUE / PLACEHOLDER
-                            " OFFSET " + offset + " ROWS FETCH NEXT " + size + " ROWS ONLY";
-
+                    logger.warn("SQL Server pagination is used without an explicit ORDER BY clause. This might lead to unpredictable results or errors. Please provide an 'orderByColumn' parameter.");
+                    return "SELECT " + columns + " FROM " + tableName + // Qualify if needed
+                           " ORDER BY (SELECT NULL) " + // THIS IS A POTENTIAL ISSUE / PLACEHOLDER
+                           " OFFSET " + offset + " ROWS FETCH NEXT " + size + " ROWS ONLY";
                 }
                 return "SELECT " + columns + " FROM " + tableName + // Qualify if needed
                        " ORDER BY " + orderBy +
                        " OFFSET " + offset + " ROWS FETCH NEXT " + size + " ROWS ONLY";
-
             default:
                 throw new IllegalArgumentException("Unsupported database type for getTableDataWithPagination: " + dbType);
         }
+    }
+    
+    public String checkPgTableExists(@Param("tableName") String tableName) {
+        return new SQL() {{
+            SELECT("COUNT(*)");
+            FROM("information_schema.tables");
+            WHERE("table_name = LOWER(#{tableName})");
+            AND();
+            WHERE("table_schema = current_schema()");
+        }}.toString();
     }
     
     // Helper for SQL Server pagination to get a sort key if not provided

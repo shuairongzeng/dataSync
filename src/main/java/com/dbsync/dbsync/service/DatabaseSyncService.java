@@ -2,20 +2,7 @@ package com.dbsync.dbsync.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dbsync.dbsync.mapper.TableMapper;
-import org.apache.ibatis.session.SqlSession;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
-
-import java.sql.*;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-public class DatabaseSyncService {
+import com.dbsync.dbsync.progress.ProgressManager;
 import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -30,14 +17,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-public class DatabaseSyncService {
-    private static final Logger logger = LoggerFactory.getLogger(DatabaseSyncService.class);
-    private final SqlSessionFactory sourceFactory;
-    private final SqlSessionFactory targetFactory;
-    private final boolean truncateBeforeSync;
-    private final TypeMappingRegistry typeMappingRegistry;
-import com.dbsync.dbsync.progress.ProgressManager; // Added import
-import javax.sql.DataSource; // Added import
+import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import javax.sql.DataSource;
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 public class DatabaseSyncService {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseSyncService.class);
@@ -67,8 +60,9 @@ public class DatabaseSyncService {
 
     /**
      * Synchronizes a list of specified tables for a given task.
-     * @param taskId The unique ID for this synchronization task.
-     * @param tablesToSync List of table names to synchronize.
+     *
+     * @param taskId           The unique ID for this synchronization task.
+     * @param tablesToSync     List of table names to synchronize.
      * @param sourceSchemaName The schema name for the source database.
      */
     public void syncDatabase(String taskId, List<String> tablesToSync, String sourceSchemaName) {
@@ -98,7 +92,7 @@ public class DatabaseSyncService {
                     // progressManager.completeTableSync already logs success
                 } catch (Exception e) {
                     targetSession.rollback(); // Rollback for the current table
-                    allTablesSuccess = false; 
+                    allTablesSuccess = false;
                     // progressManager.completeTableSync (with failure) is called in syncTable's finally block
                     logger.error("Task [{}]: Failed to synchronize table {}. Error: {}", taskId, tableName, e.getMessage());
                     // Continue with the next table
@@ -116,7 +110,7 @@ public class DatabaseSyncService {
                            String tableName, String sourceSchemaName, String tableComment) throws Exception {
         TableMapper sourceMapper = sourceSession.getMapper(TableMapper.class);
         TableMapper targetMapper = targetSession.getMapper(TableMapper.class);
-        
+
         long sourceRecordCount = 0;
         boolean tableStructureCreatedOrExisted = false;
         String failureReason = null;
@@ -130,9 +124,9 @@ public class DatabaseSyncService {
             try {
                 List<Map<String, Object>> targetStructure = targetMapper.getTableStructure(this.targetDbType, tableName, this.targetSchemaName);
                 tableExistsInTarget = (targetStructure != null && !targetStructure.isEmpty());
-                 if(!tableExistsInTarget && this.targetDbType.equals("postgresql")){
-                     tableExistsInTarget = targetMapper.checkPgTableExists(targetTableNameForCheck) > 0;
-                 }
+                if (!tableExistsInTarget && this.targetDbType.equals("postgresql")) {
+                    tableExistsInTarget = targetMapper.checkPgTableExists(targetTableNameForCheck) > 0;
+                }
             } catch (Exception e) {
                 logger.warn("Task [{}], Table [{}]: Could not reliably check if target table exists, assuming it does not. Error: {}", taskId, tableName, e.getMessage());
                 tableExistsInTarget = false;
@@ -145,7 +139,7 @@ public class DatabaseSyncService {
                     throw new Exception("No structure found for source table " + sourceSchemaName + "." + tableName + ". Cannot create target table.");
                 }
                 List<Map<String, String>> sourceColumnComments = sourceMapper.getColumnComments(this.sourceDbType, tableName, sourceSchemaName);
-                
+
                 // Fetch table comment if not provided (and if needed for DDL)
                 // ... (logic for tableComment fetching if necessary) ...
 
@@ -173,25 +167,25 @@ public class DatabaseSyncService {
 
             // Sync data
             if (sourceRecordCount > 0) {
-                 syncTableData(taskId, sourceSession, targetSession, tableName, sourceSchemaName);
+                syncTableData(taskId, sourceSession, targetSession, tableName, sourceSchemaName);
             } else {
                 logger.info("Task [{}], Table [{}]: No records to sync from source.", taskId, tableName);
             }
-            
+
         } catch (Exception e) {
             failureReason = e.getMessage();
             logger.error("Task [{}], Table [{}]: Error during table synchronization process: {}", taskId, tableName, failureReason, e);
             throw e; // Rethrow to be caught by syncDatabase loop
         } finally {
             // If startTableSync was called (i.e., sourceRecordCount was fetched), then complete it.
-            if (progressManager.getTaskProgress(taskId) != null && 
-                progressManager.getTaskProgress(taskId).getTableProgress(tableName) != null &&
-                progressManager.getTaskProgress(taskId).getTableProgress(tableName).getStartTime() != null) {
-                
+            if (progressManager.getTaskProgress(taskId) != null &&
+                    progressManager.getTaskProgress(taskId).getTableProgress(tableName) != null &&
+                    progressManager.getTaskProgress(taskId).getTableProgress(tableName).getStartTime() != null) {
+
                 boolean successStatus = (failureReason == null) && tableStructureCreatedOrExisted;
-                 // If data sync started, its success is determined by exceptions during syncTableData.
-                 // If structure creation failed before data sync, it's a failure.
-                 // If sourceRecordCount was 0, it's success if structure part was okay.
+                // If data sync started, its success is determined by exceptions during syncTableData.
+                // If structure creation failed before data sync, it's a failure.
+                // If sourceRecordCount was 0, it's success if structure part was okay.
                 if (sourceRecordCount == 0 && !tableStructureCreatedOrExisted && failureReason == null) {
                     // Case where table structure couldn't be fetched from source (already logged and thrown by getTableStructure)
                     // This might result in failureReason being set if getTableStructure throws
@@ -220,7 +214,7 @@ public class DatabaseSyncService {
                 Integer dataLengthInt = (length != null) ? length.intValue() : null;
                 Integer dataPrecisionInt = (precision != null) ? precision.intValue() : null;
                 Integer dataScaleInt = (scale != null) ? scale.intValue() : null;
-                
+
                 Integer columnSizeForMapper = dataLengthInt;
                 Integer decimalDigitsForMapper = dataScaleInt;
 
@@ -228,19 +222,19 @@ public class DatabaseSyncService {
                 // Individual mappers might have more specific logic for their source DB.
                 if (sourceDataType != null) {
                     String upperSourceDataType = sourceDataType.toUpperCase();
-                    if (upperSourceDataType.contains("NUMBER") || 
-                        upperSourceDataType.contains("DECIMAL") || 
-                        upperSourceDataType.contains("NUMERIC") ||
-                        upperSourceDataType.contains("FLOAT") || // Oracle FLOAT(binary_precision) uses precision for size
-                        upperSourceDataType.contains("DOUBLE") ||
-                        upperSourceDataType.contains("MONEY")) { // SQL Server money types
+                    if (upperSourceDataType.contains("NUMBER") ||
+                            upperSourceDataType.contains("DECIMAL") ||
+                            upperSourceDataType.contains("NUMERIC") ||
+                            upperSourceDataType.contains("FLOAT") || // Oracle FLOAT(binary_precision) uses precision for size
+                            upperSourceDataType.contains("DOUBLE") ||
+                            upperSourceDataType.contains("MONEY")) { // SQL Server money types
                         columnSizeForMapper = dataPrecisionInt;
                     }
-                     // For types like VARCHAR(n), CHAR(n), DATA_LENGTH is usually the correct size.
-                     // For types like TIME(p), TIMESTAMP(p), DATA_SCALE or a specific attribute might hold 'p'.
-                     // The current structure map (DATA_LENGTH, DATA_PRECISION, DATA_SCALE) is generic.
-                     // Mappers should be robust enough or this part might need DB-specific pre-processing.
-                     // For example, SQL Server's TIME(p) might put 'p' in DATA_SCALE.
+                    // For types like VARCHAR(n), CHAR(n), DATA_LENGTH is usually the correct size.
+                    // For types like TIME(p), TIMESTAMP(p), DATA_SCALE or a specific attribute might hold 'p'.
+                    // The current structure map (DATA_LENGTH, DATA_PRECISION, DATA_SCALE) is generic.
+                    // Mappers should be robust enough or this part might need DB-specific pre-processing.
+                    // For example, SQL Server's TIME(p) might put 'p' in DATA_SCALE.
                     if (upperSourceDataType.startsWith("TIME") && dataScaleInt != null) { // e.g. SQL Server TIME(p)
                         // Here, decimalDigitsForMapper is already dataScaleInt.
                         // columnSizeForMapper for TIME(p) is not typically its length, but its precision.
@@ -275,12 +269,12 @@ public class DatabaseSyncService {
 
             sql.append(")");
 
-            logger.debug("生成的建表SQL: {}", sql.toString());
+            logger.debug("生成的建表 SQL: {}", sql.toString());
             return sql.toString();
 
         } catch (Exception e) {
-            logger.error("生成建表SQL失败: {}", e.getMessage());
-            throw new RuntimeException("生成建表SQL失败", e);
+            logger.error("生成建表 SQL 失败：{}", e.getMessage());
+            throw new RuntimeException("生成建表 SQL 失败", e);
         }
     }
 
@@ -318,7 +312,7 @@ public class DatabaseSyncService {
 
                 if (batchData.isEmpty()) {
                     if (processedCount < totalCount) {
-                         logger.warn("Task [{}], Table [{}]: Expected more data (processed {} of {}), but batch was empty. Pagination might be inconsistent or source data changed.",
+                        logger.warn("Task [{}], Table [{}]: Expected more data (processed {} of {}), but batch was empty. Pagination might be inconsistent or source data changed.",
                                 taskId, tableName, processedCount, totalCount);
                     }
                     break; // No more data
@@ -339,17 +333,17 @@ public class DatabaseSyncService {
 
                 if (batchData.size() < batchSize) {
                     // Last page was smaller than batchSize, means we are done.
-                    if(processedCount < totalCount && page.getCurrent()*batchSize > totalCount) {
+                    if (processedCount < totalCount && page.getCurrent() * batchSize > totalCount) {
                         //This is expected if the last page is not full
                     } else if (processedCount < totalCount) {
-                         logger.warn("Task [{}], Table [{}]: Processed count {} is less than total count {} after processing a partial batch. Data might have changed during sync.",
+                        logger.warn("Task [{}], Table [{}]: Processed count {} is less than total count {} after processing a partial batch. Data might have changed during sync.",
                                 taskId, tableName, processedCount, totalCount);
                     }
-                    break; 
+                    break;
                 }
                 page.setCurrent(page.getCurrent() + 1);
             }
-            
+
             // Final check on processed count if relying on local processedCount
             // TableSyncProgress currentTableProgress = this.progressManager.getTaskProgress(taskId).getTableProgress(tableName);
             // if (currentTableProgress.getRecordsProcessed() < totalCount && tableSyncSuccess) {
@@ -366,80 +360,77 @@ public class DatabaseSyncService {
         }
     }
 
-    private int executeAndReportBatchInsert(String taskId, String sourceTableNameForProgress, // Typically same as targetTableName
-                                             String targetTableName, List<Map<String, Object>> batchData) {
+    private int executeAndReportBatchInsert(String taskId, String sourceTableNameForProgress,
+                                            String targetTableName, List<Map<String, Object>> batchData) {
         if (batchData.isEmpty()) {
             return 0;
         }
-        // Use the targetFactory's DataSource for the JdbcTemplate
         DataSource targetDataSource = targetFactory.getConfiguration().getEnvironment().getDataSource();
         JdbcTemplate jdbcTemplate = new JdbcTemplate(targetDataSource);
 
-        // Prepare SQL and column list from the first data row
         Map<String, Object> firstRow = batchData.get(0);
-        List<String> columns = firstRow.keySet().stream()
+        List<String> finalColumns = firstRow.keySet().stream()
                 .filter(column -> !column.equalsIgnoreCase("rnum") && !column.equalsIgnoreCase("rownum"))
+                .filter(column -> !column.equalsIgnoreCase("rnum_")) // 过滤掉 rnum_
+                .filter(column -> !column.equalsIgnoreCase("rn")) // 过滤掉 rn
                 .collect(Collectors.toList());
 
-        if (columns.isEmpty()) {
-            logger.warn("Task [{}], Table [{}]: No columns found for batch insert. Skipping batch.", taskId, sourceTableNameForProgress);
+        if (finalColumns.isEmpty()) {
+            logger.warn("Task [{}], Table [{}]: No columns found for batch insert. Skipping batch.",
+                    taskId, sourceTableNameForProgress);
             return 0;
         }
-        
+//        List<String> filteredColumns = columns.stream()
+//                .filter(column -> !column.equalsIgnoreCase("rnum_")) // 过滤掉 rnum_
+//                .filter(column -> !column.equalsIgnoreCase("rn")) // 过滤掉 rn
+//                .collect(Collectors.toList());
+//        columns = filteredColumns;
         StringBuilder sqlBuilder = new StringBuilder();
         sqlBuilder.append("INSERT INTO ").append(targetTableName).append(" (");
-        sqlBuilder.append(String.join(", ", columns.stream().map(String::toLowerCase).collect(Collectors.toList())));
+        sqlBuilder.append(String.join(", ", finalColumns.stream().map(String::toLowerCase).collect(Collectors.toList())));
         sqlBuilder.append(") VALUES (");
-        sqlBuilder.append(columns.stream().map(c -> "?").collect(Collectors.joining(",")));
+        sqlBuilder.append(finalColumns.stream().map(c -> "?").collect(Collectors.joining(",")));
         sqlBuilder.append(")");
-        
+
         String sql = sqlBuilder.toString();
 
         try {
-            int[] rowsAffectedArray = jdbcTemplate.batchUpdate(sql, batchData, batchData.size(),
-                (ps, argument) -> {
-                    for (int i = 0; i < columns.size(); i++) {
-                        ps.setObject(i + 1, argument.get(columns.get(i)));
-                    }
-                });
+
+            int[][] rowsAffectedArray = jdbcTemplate.batchUpdate(sql, batchData, batchData.size(),
+                    (ps, argument) -> {
+                        for (int i = 0; i < finalColumns.size(); i++) {
+                            ps.setObject(i + 1, argument.get(finalColumns.get(i)));
+                        }
+                    });
 
             int totalRowsAffected = 0;
-            for (int rows : rowsAffectedArray) {
-                // For batchUpdate, JDBC drivers might return Statement.SUCCESS_NO_INFO (-2)
-                // or Statement.EXECUTE_FAILED (-3). We count actual affected rows.
-                if (rows > 0) {
-                    totalRowsAffected += rows;
-                } else if (rows == Statement.SUCCESS_NO_INFO) {
-                    // If driver returns SUCCESS_NO_INFO, we can assume the command was successful for one row.
-                    // This is an approximation if precise count isn't available.
-                    // Or, for more accuracy, one might need to verify this behavior with the specific JDBC driver.
-                    // For simplicity here, let's assume each command in the batch affected one row if SUCCESS_NO_INFO.
-                    // A more conservative approach would be to not count it or count as 1.
-                    // Let's count it as 1 for progress reporting, assuming success.
-                    totalRowsAffected += 1; 
+            for (int[] batchResults : rowsAffectedArray) {
+                for (int rows : batchResults) {
+                    if (rows > 0) {
+                        totalRowsAffected += rows;
+                    } else if (rows == Statement.SUCCESS_NO_INFO) {
+                        totalRowsAffected += 1;
+                    }
                 }
             }
-            
+
             if (totalRowsAffected > 0) {
-                 this.progressManager.updateTableProgress(taskId, sourceTableNameForProgress, totalRowsAffected);
-            } else if (batchData.size() > 0 && totalRowsAffected == 0 && 
-                       rowsAffectedArray.length > 0 && rowsAffectedArray[0] == Statement.SUCCESS_NO_INFO) {
-                // If all results are SUCCESS_NO_INFO, it means commands were sent.
-                // Let's assume this means all rows in the batch were processed.
+                this.progressManager.updateTableProgress(taskId, sourceTableNameForProgress, totalRowsAffected);
+            } else if (batchData.size() > 0 && totalRowsAffected == 0 &&
+                    rowsAffectedArray.length > 0 && rowsAffectedArray[0][0] == Statement.SUCCESS_NO_INFO) {
                 this.progressManager.updateTableProgress(taskId, sourceTableNameForProgress, batchData.size());
-                totalRowsAffected = batchData.size(); // For return value consistency
+                totalRowsAffected = batchData.size();
             }
 
-
-            logger.debug("Task [{}], Table [{}->{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected reported by driver: {}",
-                         taskId, sourceTableNameForProgress, targetTableName, sql, batchData.size(), totalRowsAffected);
+            logger.debug("Task [{}], Table [{}->{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected: {}",
+                    taskId, sourceTableNameForProgress, targetTableName, sql, batchData.size(), totalRowsAffected);
             return totalRowsAffected;
 
         } catch (Exception e) {
             logger.error("Task [{}], Table [{}->{}]: Error during batch insert. SQL: [{}], Error: {}",
-                         taskId, sourceTableNameForProgress, targetTableName, sql, e.getMessage(), e);
-            // Optionally rethrow or handle more gracefully, perhaps marking table as failed
-            this.progressManager.completeTableSync(taskId, sourceTableNameForProgress, false, "Batch insert failed: " + e.getMessage());
+                    taskId, sourceTableNameForProgress, targetTableName, sql, e.getMessage(), e);
+            this.progressManager.completeTableSync(taskId, sourceTableNameForProgress, false,
+                    "Batch insert failed: " + e.getMessage());
             throw new RuntimeException("Batch insert failed for table " + sourceTableNameForProgress, e);
         }
     }

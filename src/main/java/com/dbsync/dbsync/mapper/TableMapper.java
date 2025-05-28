@@ -1,6 +1,5 @@
 package com.dbsync.dbsync.mapper;
 
-
 import com.dbsync.dbsync.service.BatchInsertSqlProvider;
 import org.apache.ibatis.annotations.*;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page; // 导入 Page 类
@@ -8,10 +7,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page; // 导入 Pag
 import java.util.List;
 import java.util.Map;
 
+@Mapper
 public interface TableMapper {
 
     /**
-     * 执行动态SQL
+     * 执行动态 SQL
      * @param sql
      * @param params
      */
@@ -34,14 +34,14 @@ public interface TableMapper {
     List<Map<String, Object>> getTableDataWithPagination(Map<String, Object> params);
 
     /**
-     * 添加执行DDL的方法
+     * 添加执行 DDL 的方法
      * @param sql
      */
     @Update("${sql}")
     void executeDDL(String sql);
 
     /**
-     * 添加执行DML的方法
+     * 添加执行 DML 的方法
      * @param sql
      */
     @Update("${sql}")
@@ -83,16 +83,6 @@ public interface TableMapper {
     List<Map<String, Object>> getTableData(String tableName);
 
     /**
-     * Oracle检查表是否存在
-     * @param tableName
-     * @return
-     */
-    // The checkTableExists logic will be handled in DatabaseSyncService using dbType-specific queries
-    // or by attempting to query metadata and catching exceptions if necessary.
-    // For simplicity, removing checkOracleTableExists and checkPgTableExists from here.
-    // The service layer can call getTableStructure or similar and check for empty result/exception.
-
-    /**
      * 清空表数据 - This is generally cross-database, but TRUNCATE might need specific permissions.
      * Using ${tableName} is fine as it's controlled internally.
      * @param tableName
@@ -109,4 +99,12 @@ public interface TableMapper {
      */
     @SelectProvider(type = TableMetadataSqlProvider.class, method = "getTableCount")
     long getTableCount(@Param("dbType") String dbType, @Param("tableName") String tableName, @Param("schemaName") String schemaName);
+
+    /**
+     * 检查 PostgreSQL 表是否存在
+     * @param tableName 要检查的表名
+     * @return 如果表存在返回 1，否则返回 0
+     */
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "checkPgTableExists")
+    long checkPgTableExists(@Param("tableName") String tableName);
 }

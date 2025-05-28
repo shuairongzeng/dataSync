@@ -29,8 +29,10 @@ public class OracleToPostgresSyncWithSchema {
     private static final Map<String, String> TABLE_NAME_MAPPING = new HashMap<>();
 
     static {
-//        for (String t : ORACLE_TABLES) TABLE_NAME_MAPPING.put(t, t);
-        TABLE_NAME_MAPPING.put("OMS_ORDER", "OMS_ORDER_1");
+        for (String t : ORACLE_TABLES) {
+            TABLE_NAME_MAPPING.put(t, t);
+        }
+     //  TABLE_NAME_MAPPING.put("OMS_ORDER", "OMS_ORDER_1");
     }
 
     private static final Map<String, String> DATA_TYPE_MAPPING = OracleToPostgresTypeMapping.getDataTypeMapping();
@@ -71,7 +73,9 @@ public class OracleToPostgresSyncWithSchema {
                 // 检查结果
                 int successCount = 0;
                 for (Future<Boolean> future : futures) {
-                    if (future.get()) successCount++;
+                    if (future.get()) {
+                        successCount++;
+                    }
                 }
                 logger.info("同步完成，成功同步 {} 个表，失败 {} 个表",
                         successCount, ORACLE_TABLES.size() - successCount);

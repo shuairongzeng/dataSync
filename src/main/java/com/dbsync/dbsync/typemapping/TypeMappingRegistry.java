@@ -1,17 +1,17 @@
 package com.dbsync.dbsync.typemapping;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
-
-public class TypeMappingRegistry {
-
-    private static final String DEFAULT_MAPPER_KEY = "default";
-    private final Map<String, TypeMapper> mappers = new HashMap<>();
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+
 
 @Component
 public class TypeMappingRegistry {
@@ -19,6 +19,7 @@ public class TypeMappingRegistry {
     private static final Logger logger = LoggerFactory.getLogger(TypeMappingRegistry.class);
     private static final String DEFAULT_MAPPER_KEY = "default";
     private final Map<String, TypeMapper> mappers = new HashMap<>();
+    private final Map<String, Map<String, String>> typeMappings = new HashMap<>();
 
     public TypeMappingRegistry() {
         // Initialize with a default mapper that provides a basic fallback
@@ -76,7 +77,23 @@ public class TypeMappingRegistry {
         registerMapper("sqlserver", "sqlserver", new SqlServerToSqlServerTypeMapper());
         registerMapper("dameng", "dameng", new DamengToDamengTypeMapper()); // Assumes Dameng is Oracle-like
         registerMapper("vastbase", "vastbase", new VastbaseToVastbaseTypeMapper()); // Assumes Vastbase is PG-like
-        // Future mappers will be registered here:
+
+        // 初始化默认的 Oracle 到 PostgreSQL 的映射
+        Map<String, String> oracleToPostgres = new HashMap<>();
+        oracleToPostgres.put("NUMBER", "NUMERIC");
+        oracleToPostgres.put("VARCHAR2", "VARCHAR");
+        oracleToPostgres.put("CHAR", "CHAR");
+        oracleToPostgres.put("DATE", "TIMESTAMP");
+        oracleToPostgres.put("TIMESTAMP", "TIMESTAMP");
+        oracleToPostgres.put("CLOB", "TEXT");
+        oracleToPostgres.put("BLOB", "BYTEA");
+        oracleToPostgres.put("RAW", "BYTEA");
+        oracleToPostgres.put("FLOAT", "DOUBLE PRECISION");
+        oracleToPostgres.put("INTEGER", "INTEGER");
+        oracleToPostgres.put("LONG", "TEXT");
+        oracleToPostgres.put("XMLTYPE", "XML");
+        
+        typeMappings.put("oracle", oracleToPostgres);
     }
 
     /**
@@ -151,8 +168,12 @@ public class TypeMappingRegistry {
                 return "TEXT"; // Default for unspecified length or very large strings
             }
             if (upperType.contains("INT")) { // Catches INTEGER, BIGINT, SMALLINT, TINYINT
-                if (upperType.contains("BIG")) return "BIGINT";
-                if (upperType.contains("SMALL")) return "SMALLINT";
+                if (upperType.contains("BIG")) {
+                    return "BIGINT";
+                }
+                if (upperType.contains("SMALL")) {
+                    return "SMALLINT";
+                }
                 return "INTEGER";
             }
             if (upperType.contains("NUMERIC") || upperType.contains("DECIMAL") || upperType.contains("NUMBER")) {
@@ -182,5 +203,10 @@ public class TypeMappingRegistry {
             logger.warn("Warning: DefaultTypeMapper could not determine a specific mapping for {}. Defaulting to TEXT.", sourceColumnType);
             return "TEXT";
         }
+    }
+
+    public void registerTypeMapping(String sourceDbType, String sourceType, String targetType) {
+        typeMappings.computeIfAbsent(sourceDbType.toLowerCase(), k -> new HashMap<>())
+                   .put(sourceType.toUpperCase(), targetType);
     }
 }
