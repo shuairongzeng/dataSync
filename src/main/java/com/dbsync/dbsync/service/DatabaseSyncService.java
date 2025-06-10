@@ -26,6 +26,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 import java.sql.*;
+import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
+import org.apache.ibatis.mapping.Environment;
+import org.apache.ibatis.session.Configuration;
+import org.apache.ibatis.session.SqlSessionFactoryBuilder;
+import org.apache.ibatis.transaction.TransactionFactory;
+import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -320,7 +326,8 @@ public class DatabaseSyncService {
                 }
 
                 try {
-                    int rowsAffectedInBatch = executeAndReportBatchInsert(taskId, tableName, tableName.toLowerCase(), batchData);
+                    // Pass the class field targetFactory to the refactored method
+                    int rowsAffectedInBatch = executeAndReportBatchInsert(taskId, tableName, tableName.toLowerCase(), batchData, this.targetFactory);
                     // executeAndReportBatchInsert already calls progressManager.updateTableProgress
                     // processedCount is now tracked by progressManager via updateTableProgress calls
                     processedCount += rowsAffectedInBatch; // Keep a local count for loop termination, or rely on progressManager's value
@@ -361,12 +368,13 @@ public class DatabaseSyncService {
         }
     }
 
-    private int executeAndReportBatchInsert(String taskId, String sourceTableNameForProgress,
-                                            String targetTableName, List<Map<String, Object>> batchData) {
-        if (batchData.isEmpty()) {
+    private int executeAndReportBatchInsert(String taskId, String progressIdentifier,
+                                            String targetTableName, List<Map<String, Object>> batchData,
+                                            SqlSessionFactory currentTargetFactory) throws Exception {
+        if (batchData == null || batchData.isEmpty()) {
             return 0;
         }
-        DataSource targetDataSource = targetFactory.getConfiguration().getEnvironment().getDataSource();
+        DataSource targetDataSource = currentTargetFactory.getConfiguration().getEnvironment().getDataSource();
         JdbcTemplate jdbcTemplate = new JdbcTemplate(targetDataSource);
 
         Map<String, Object> firstRow = batchData.get(0);
@@ -377,8 +385,8 @@ public class DatabaseSyncService {
                 .collect(Collectors.toList());
 
         if (finalColumns.isEmpty()) {
-            logger.warn("Task [{}], Table [{}]: No columns found for batch insert. Skipping batch.",
-                    taskId, sourceTableNameForProgress);
+            logger.warn("Task [{}], ProgressID [{}]: No columns found for batch insert. Skipping batch.",
+                    taskId, progressIdentifier);
             return 0;
         }
 //        List<String> filteredColumns = columns.stream()
@@ -410,29 +418,28 @@ public class DatabaseSyncService {
                     if (rows > 0) {
                         totalRowsAffected += rows;
                     } else if (rows == Statement.SUCCESS_NO_INFO) {
-                        totalRowsAffected += 1;
+                        totalRowsAffected += 1; // Count SUCCESS_NO_INFO as one row affected for progress tracking
                     }
                 }
             }
 
             if (totalRowsAffected > 0) {
-                this.progressManager.updateTableProgress(taskId, sourceTableNameForProgress, totalRowsAffected);
+                this.progressManager.updateTableProgress(taskId, progressIdentifier, totalRowsAffected);
             } else if (batchData.size() > 0 && totalRowsAffected == 0 &&
                     rowsAffectedArray.length > 0 && rowsAffectedArray[0][0] == Statement.SUCCESS_NO_INFO) {
-                this.progressManager.updateTableProgress(taskId, sourceTableNameForProgress, batchData.size());
+                this.progressManager.updateTableProgress(taskId, progressIdentifier, batchData.size());
                 totalRowsAffected = batchData.size();
             }
 
-            logger.debug("Task [{}], Table [{}->{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected: {}",
-                    taskId, sourceTableNameForProgress, targetTableName, sql, batchData.size(), totalRowsAffected);
+            logger.debug("Task [{}], ProgressID [{}], Table [{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected: {}",
+                    taskId, progressIdentifier, targetTableName, sql, batchData.size(), totalRowsAffected);
             return totalRowsAffected;
 
         } catch (Exception e) {
-            logger.error("Task [{}], Table [{}->{}]: Error during batch insert. SQL: [{}], Error: {}",
-                    taskId, sourceTableNameForProgress, targetTableName, sql, e.getMessage(), e);
-            this.progressManager.completeTableSync(taskId, sourceTableNameForProgress, false,
-                    "Batch insert failed: " + e.getMessage());
-            throw new RuntimeException("Batch insert failed for table " + sourceTableNameForProgress, e);
+            logger.error("Task [{}], ProgressID [{}], Table [{}]: Error during batch insert. SQL: [{}], Error: {}",
+                    taskId, progressIdentifier, targetTableName, sql, e.getMessage(), e);
+            // Removed completeTableSync, caller will handle it.
+            throw e; // Rethrow the exception
         }
     }
 
@@ -489,4 +496,257 @@ public class DatabaseSyncService {
 //
 //        return sql.toString();
 //    }
+
+    private SqlSessionFactory createSqlSessionFactory(Map<String, String> connectionDetails) throws Exception {
+        String url = connectionDetails.get("url");
+        String username = connectionDetails.get("username");
+        String password = connectionDetails.get("password");
+        String driverClassName = connectionDetails.get("driverClassName");
+
+        if (driverClassName == null || driverClassName.isEmpty()) {
+            throw new IllegalArgumentException("Driver class name is required.");
+        }
+        if (url == null || url.isEmpty()) {
+            throw new IllegalArgumentException("Database URL is required.");
+        }
+        // Username and password can be optional depending on DB configuration
+
+        Class.forName(driverClassName);
+        DataSource dataSource = new UnpooledDataSource(
+                driverClassName,
+                url,
+                username,
+                password
+        );
+
+        TransactionFactory transactionFactory = new JdbcTransactionFactory();
+        Environment environment = new Environment("customDbEnv-" + driverClassName, transactionFactory, dataSource);
+        Configuration configuration = new Configuration(environment);
+        configuration.addMapper(TableMapper.class); // Assuming TableMapper might be needed
+        return new SqlSessionFactoryBuilder().build(configuration);
+    }
+
+    public void executeCustomQueryAndSaveResults(
+            String taskId,
+            Map<String, String> sourceConnectionDetails,
+            Map<String, String> targetConnectionDetails,
+            String customSql,
+            String targetTableName,
+            String targetSchemaName
+    ) throws Exception {
+        // Initial Parameter Validations
+        if (customSql == null || customSql.trim().isEmpty()) {
+            logger.error("Task [{}]: Custom SQL query is missing or empty.", taskId);
+            throw new IllegalArgumentException("Custom SQL query is missing or empty.");
+        }
+        if (targetTableName == null || targetTableName.trim().isEmpty()) {
+            logger.error("Task [{}]: Target table name is missing or empty.", taskId);
+            throw new IllegalArgumentException("Target table name is missing or empty.");
+        }
+        if (sourceConnectionDetails == null) {
+            logger.error("Task [{}]: Source connection details are missing.", taskId);
+            throw new IllegalArgumentException("Source connection details are missing.");
+        }
+        if (targetConnectionDetails == null) {
+            logger.error("Task [{}]: Target connection details are missing.", taskId);
+            throw new IllegalArgumentException("Target connection details are missing.");
+        }
+        // Essential keys (dbType already checked later, url/driverClassName checked in createSqlSessionFactory)
+        // but good to have an early check for dbType as it's used before createSqlSessionFactory for source.
+        if (sourceConnectionDetails.get("dbType") == null || sourceConnectionDetails.get("dbType").trim().isEmpty()){
+            logger.error("Task [{}]: Source database type ('dbType') not provided in sourceConnectionDetails.", taskId);
+            throw new IllegalArgumentException("Source database type ('dbType') is required in sourceConnectionDetails.");
+        }
+         if (targetConnectionDetails.get("dbType") == null || targetConnectionDetails.get("dbType").trim().isEmpty()){
+            logger.error("Task [{}]: Target database type ('dbType') not provided in targetConnectionDetails.", taskId);
+            throw new IllegalArgumentException("Target database type ('dbType') is required in targetConnectionDetails.");
+        }
+
+
+        this.progressManager.startTask(taskId, 1); // One overall operation: custom query execution and save
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        List<Map<String, Object>> columnDetailsList = new ArrayList<>();
+        List<String> resultColumnNames = new ArrayList<>();
+        SqlSessionFactory customSourceFactory = null;
+        SqlSessionFactory customTargetFactory = null;
+
+        try {
+            logger.info("Task [{}]: Starting custom query execution against source.", taskId);
+            customSourceFactory = createSqlSessionFactory(sourceConnectionDetails);
+
+            try (SqlSession sqlSession = customSourceFactory.openSession();
+                 Connection connection = sqlSession.getConnection();
+                 Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(customSql)) {
+
+                ResultSetMetaData metaData = resultSet.getMetaData();
+                int columnCount = metaData.getColumnCount();
+                logger.info("Task [{}]: Custom query returned {} columns.", taskId, columnCount);
+
+                for (int i = 1; i <= columnCount; i++) {
+                    String colName = metaData.getColumnName(i);
+                    resultColumnNames.add(colName);
+
+                    Map<String, Object> colDetail = new HashMap<>();
+                    colDetail.put("COLUMN_NAME", colName);
+                    colDetail.put("TYPE_NAME", metaData.getColumnTypeName(i));
+                    colDetail.put("PRECISION", metaData.getPrecision(i));
+                    colDetail.put("SCALE", metaData.getScale(i));
+                    colDetail.put("IS_NULLABLE", metaData.isNullable(i) != ResultSetMetaData.columnNoNulls);
+                    columnDetailsList.add(colDetail);
+                }
+
+                while (resultSet.next()) {
+                    Map<String, Object> row = new HashMap<>();
+                    for (String columnName : resultColumnNames) {
+                        row.put(columnName, resultSet.getObject(columnName));
+                    }
+                    results.add(row);
+                }
+                logger.info("Task [{}]: Fetched {} rows from custom query.", taskId, results.size());
+                if (!results.isEmpty()) {
+                    logger.debug("Task [{}]: First row of custom query result: {}", taskId, results.get(0));
+                }
+            } catch (SQLException e) {
+                logger.error("Task [{}]: SQL error during custom query execution or data fetching: {}", taskId, e.getMessage(), e);
+                throw new Exception("SQL error during custom query: " + e.getMessage(), e);
+            } catch (Exception e) {
+                logger.error("Task [{}]: Error during source custom query execution: {}", taskId, e.getMessage(), e);
+                throw e;
+            }
+
+            // --- Target Database Operations ---
+            logger.info("Task [{}]: Starting target database operations for table '{}'.", taskId, targetTableName);
+            String sourceDbTypeFromDetails = sourceConnectionDetails.get("dbType");
+            if (sourceDbTypeFromDetails == null || sourceDbTypeFromDetails.isEmpty()) {
+                logger.error("Task [{}]: Source database type ('dbType') not provided in sourceConnectionDetails.", taskId);
+                throw new IllegalArgumentException("Source database type ('dbType') is required in sourceConnectionDetails.");
+            }
+            String targetDbTypeFromDetails = targetConnectionDetails.get("dbType");
+            if (targetDbTypeFromDetails == null || targetDbTypeFromDetails.isEmpty()) {
+                logger.error("Task [{}]: Target database type ('dbType') not provided in targetConnectionDetails.", taskId);
+                throw new IllegalArgumentException("Target database type ('dbType') is required in targetConnectionDetails.");
+            }
+
+            customTargetFactory = createSqlSessionFactory(targetConnectionDetails);
+            try (SqlSession targetSqlSession = customTargetFactory.openSession(false)) { // Auto-commit false
+                TableMapper targetMapper = targetSqlSession.getMapper(TableMapper.class);
+                boolean tableExistsInTarget;
+            try {
+                List<Map<String, Object>> targetStructure = targetMapper.getTableStructure(targetDbTypeFromDetails, targetTableName, targetSchemaName);
+                tableExistsInTarget = (targetStructure != null && !targetStructure.isEmpty());
+                logger.info("Task [{}]: Checked for table '{}' in schema '{}' in target DB ({}). Exists: {}", taskId, targetTableName, targetSchemaName, targetDbTypeFromDetails, tableExistsInTarget);
+            } catch (Exception e) {
+                    logger.warn("Task [{}], Table [{}]: Could not reliably check if target table exists. Error: {}", taskId, targetTableName, e.getMessage());
+                    throw new Exception("Failed to check target table existence for " + targetTableName + ": " + e.getMessage(), e);
+                }
+
+                if (!tableExistsInTarget) {
+                    logger.info("Task [{}]: Target table '{}' does not exist in schema '{}'. Proceeding with creation.", taskId, targetTableName, targetSchemaName);
+                    String createTableSql = generateCreateTableSqlFromColumnDetails(
+                            taskId,
+                            targetTableName,
+                            columnDetailsList,
+                            sourceDbTypeFromDetails,
+                            targetDbTypeFromDetails,
+                            targetSchemaName,
+                            this.typeMappingRegistry
+                    );
+                    logger.info("Task [{}]: Executing DDL for target table {}: {}", taskId, targetTableName, createTableSql);
+                    targetMapper.executeDDL(createTableSql);
+                    targetSqlSession.commit(); // Commit DDL
+                    logger.info("Task [{}]: Table '{}' created successfully.", taskId, targetTableName);
+                } else {
+                    String errorMessage = String.format("Target table '%s' already exists in schema '%s'. Operation aborted as per policy.", targetTableName, (targetSchemaName == null ? "" : targetSchemaName));
+                    logger.error("Task [{}]: {}", taskId, errorMessage);
+                    throw new RuntimeException(errorMessage); // Or handle as per specific requirements for existing tables
+                }
+
+                // Data Insertion Stage
+                String progressIdentifierForTableSync = targetTableName;
+                long totalRecordCount = (results == null) ? 0 : results.size();
+                this.progressManager.startTableSync(taskId, progressIdentifierForTableSync, totalRecordCount);
+                boolean dataSyncSuccessful = false;
+                String dataSyncFailureReason = null;
+
+                try {
+                    if (results != null && !results.isEmpty()) {
+                        logger.info("Task [{}]: Attempting to insert {} rows into target table '{}'.", taskId, results.size(), targetTableName);
+                        executeAndReportBatchInsert(taskId, progressIdentifierForTableSync, targetTableName.toLowerCase(), results, customTargetFactory);
+                        targetSqlSession.commit(); // Commit data insertion
+                        dataSyncSuccessful = true;
+                        logger.info("Task [{}]: Data successfully inserted into table '{}' and transaction committed.", taskId, targetTableName);
+                    } else {
+                        logger.info("Task [{}]: No data fetched from source query to insert into target table '{}'.", taskId, targetTableName);
+                        dataSyncSuccessful = true; // No data to insert is still a successful state for this part.
+                    }
+                } catch (Exception e) {
+                    dataSyncFailureReason = e.getMessage();
+                    logger.error("Task [{}]: Data insertion failed for table '{}'. Error: {}", taskId, targetTableName, e.getMessage(), e);
+                    try {
+                        targetSqlSession.rollback();
+                        logger.info("Task [{}]: Transaction rolled back for table '{}' due to data insertion failure.", taskId, targetTableName);
+                    } catch (Exception rbEx) {
+                        logger.error("Task [{}]: Rollback failed for table '{}'. Error: {}", taskId, targetTableName, rbEx.getMessage(), rbEx);
+                    }
+                    throw e;
+                } finally {
+                    this.progressManager.completeTableSync(taskId, progressIdentifierForTableSync, dataSyncSuccessful, dataSyncFailureReason);
+                }
+            } // Target SqlSession try-with-resources ends here
+        } catch (Exception e) {
+            logger.error("Task [{}]: Overall failure in executeCustomQueryAndSaveResults. Error: {}", taskId, e.getMessage(), e);
+            throw e;
+        } finally {
+            this.progressManager.completeTask(taskId);
+        }
+    }
+
+    private String generateCreateTableSqlFromColumnDetails(
+            String taskId, // For logging
+            String tableName,
+            List<Map<String, Object>> columnDetailsList,
+            String sourceDbTypeForMapping,
+            String targetDbTypeForMapping,
+            String targetSchemaName, // Optional, for prefixing
+            TypeMappingRegistry typeMappingRegistry
+    ) throws SQLException {
+        StringBuilder sql = new StringBuilder();
+        String qualifiedTableName = (targetSchemaName != null && !targetSchemaName.trim().isEmpty())
+                ? targetSchemaName.trim() + "." + tableName.toLowerCase()
+                : tableName.toLowerCase();
+
+        sql.append("CREATE TABLE ").append(qualifiedTableName).append(" (\n");
+
+        for (int i = 0; i < columnDetailsList.size(); i++) {
+            Map<String, Object> colDetail = columnDetailsList.get(i);
+            String columnName = ((String) colDetail.get("COLUMN_NAME")).toLowerCase();
+            String sourceDataTypeName = (String) colDetail.get("TYPE_NAME");
+            Integer precision = (Integer) colDetail.get("PRECISION");
+            Integer scale = (Integer) colDetail.get("SCALE");
+            boolean isNullable = (Boolean) colDetail.get("IS_NULLABLE");
+
+            String targetDataType = typeMappingRegistry.mapType(
+                    sourceDataTypeName,
+                    precision,
+                    scale,
+                    sourceDbTypeForMapping,
+                    targetDbTypeForMapping
+            );
+
+            sql.append("    ").append(columnName).append(" ").append(targetDataType);
+            if (!isNullable) {
+                sql.append(" NOT NULL");
+            }
+
+            if (i < columnDetailsList.size() - 1) {
+                sql.append(",");
+            }
+            sql.append("\n");
+        }
+        sql.append(")");
+        logger.info("Task [{}]: Generated CREATE TABLE SQL for {}: {}", taskId, qualifiedTableName, sql.toString());
+        return sql.toString();
+    }
 }
