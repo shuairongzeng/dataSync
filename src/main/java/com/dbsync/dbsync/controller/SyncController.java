@@ -4,14 +4,19 @@ import com.dbsync.dbsync.progress.ProgressManager;
 import com.dbsync.dbsync.service.DatabaseSyncService;
 import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
 import org.apache.ibatis.session.SqlSessionFactory;
+import com.dbsync.dbsync.progress.TaskProgress;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.dbsync.dbsync.controller.dto.SyncRequest;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -26,6 +31,7 @@ public class SyncController {
     private final SqlSessionFactory postgresSqlSessionFactory;
     private final TypeMappingRegistry typeMappingRegistry;
     private final ProgressManager progressManager;
+    private final ExecutorService executorService;
 
     @Autowired
     public SyncController(@Qualifier("oracleSqlSessionFactory") SqlSessionFactory oracleSqlSessionFactory,
@@ -36,6 +42,7 @@ public class SyncController {
         this.postgresSqlSessionFactory = postgresSqlSessionFactory;
         this.typeMappingRegistry = typeMappingRegistry;
         this.progressManager = progressManager;
+        this.executorService = Executors.newCachedThreadPool();
     }
 
     @PostMapping("/oracle-to-postgres")
@@ -67,15 +74,37 @@ public class SyncController {
             logger.info("Tables to sync: {}", tablesToSync);
             logger.info("Truncate before sync: {}", truncateBeforeSync);
 
-            requestSpecificSyncService.syncDatabase(taskId, tablesToSync, sourceSchemaName);
+            // Submit the synchronization task to the executor service
+            executorService.submit(() -> {
+                try {
+                    logger.info("Starting background synchronization task: {}", taskId);
+                    requestSpecificSyncService.syncDatabase(taskId, tablesToSync, sourceSchemaName);
+                    logger.info("Background synchronization task {} completed.", taskId);
+                } catch (Exception e) {
+                    logger.error("Error during background synchronization task {}: {}", taskId, e.getMessage(), e);
+                    // Optional: Update task progress to FAILED here if not handled by syncDatabase itself
+                    // progressManager.completeTaskWithError(taskId, e.getMessage());
+                }
+            });
 
-            logger.info("API Synchronization task enqueued/completed: {}", taskId);
-            return ResponseEntity.ok("Synchronization task " + taskId + " started successfully.");
+            logger.info("API Synchronization task {} enqueued.", taskId); // Changed log message
+            return ResponseEntity.ok("Synchronization task " + taskId + " started successfully and is running in the background."); // Adjusted response message
 
         } catch (Exception e) {
-            logger.error("Error during API synchronization task {}: {}", taskId, e.getMessage(), e);
+            // This catch block now primarily handles errors related to task submission itself
+            logger.error("Error submitting API synchronization task {}: {}", taskId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Error during synchronization task " + taskId + ": " + e.getMessage());
+                    .body("Error starting synchronization task " + taskId + ": " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/status/{taskId}")
+    public ResponseEntity<?> getSyncStatus(@PathVariable("taskId") String taskId) {
+        TaskProgress taskProgress = this.progressManager.getTaskProgress(taskId);
+        if (taskProgress != null) {
+            return ResponseEntity.ok(taskProgress);
+        } else {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Task with ID '" + taskId + "' not found.");
         }
     }
 }
