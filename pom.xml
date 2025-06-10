@@ -18,6 +18,13 @@
         <oracle.version>19.3.0.0</oracle.version>
     </properties>
     <dependencies>
+        <!-- ADD THIS DEPENDENCY -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- END OF ADDED DEPENDENCY -->
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>

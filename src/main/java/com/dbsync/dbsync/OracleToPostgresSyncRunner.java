@@ -14,6 +14,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Profile;
 
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +30,7 @@ public class OracleToPostgresSyncRunner {
     }
 
     @Bean
+    @Profile("cli")
     public CommandLineRunner commandLineRunner(
             @Qualifier("oracleSqlSessionFactory") SqlSessionFactory sourceFactory,
             @Qualifier("postgresSqlSessionFactory") SqlSessionFactory targetFactory,
