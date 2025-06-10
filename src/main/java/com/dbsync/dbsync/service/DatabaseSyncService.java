@@ -8,6 +8,7 @@ import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.*;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+@Service
 public class DatabaseSyncService {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseSyncService.class);
     private final SqlSessionFactory sourceFactory;
@@ -53,8 +55,8 @@ public class DatabaseSyncService {
 
 
     public DatabaseSyncService(SqlSessionFactory sourceFactory, SqlSessionFactory targetFactory,
-                               boolean truncateBeforeSync, TypeMappingRegistry typeMappingRegistry,
-                               String sourceDbType, String targetDbType, String targetSchemaName,
+                               @Value("${dbsync.truncate-before-sync:false}") boolean truncateBeforeSync, TypeMappingRegistry typeMappingRegistry,
+                               @Value("${dbsync.source.db-type}") String sourceDbType, @Value("${dbsync.target.db-type}") String targetDbType, @Value("${dbsync.target.schema-name:}") String targetSchemaName,
                                ProgressManager progressManager) { // Added ProgressManager
         this.sourceFactory = sourceFactory;
         this.targetFactory = targetFactory;
