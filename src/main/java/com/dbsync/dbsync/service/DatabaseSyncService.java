@@ -211,7 +211,8 @@ public class DatabaseSyncService {
                 Number precision = (Number) column.get("DATA_PRECISION");
                 Number scale = (Number) column.get("DATA_SCALE");
 
-                Integer dataLengthInt = (length != null) ? length.intValue() : null;
+                // TODO:增加了两倍字段的长度
+                Integer dataLengthInt = (length != null) ? length.intValue()*2 : null;
                 Integer dataPrecisionInt = (precision != null) ? precision.intValue() : null;
                 Integer dataScaleInt = (scale != null) ? scale.intValue() : null;
 
