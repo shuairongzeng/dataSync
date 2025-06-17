@@ -31,3 +31,17 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Frontend build artifacts and dependencies
+frontend/app/dist
+frontend/app/node_modules
+frontend/app/node
+# Vite specific cache
+frontend/app/.vite
+# NPM debug logs
+frontend/app/npm-debug.log*
+frontend/app/yarn-debug.log*
+frontend/app/yarn-error.log*
+# Local Env files
+frontend/app/.env.local
+frontend/app/.env.*.local
