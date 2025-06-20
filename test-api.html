@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 3px;
+            padding: 10px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+    </style>
+</head>
+<body>
+    <h1>DbSync API测试页面</h1>
+    
+    <div class="test-section">
+        <h2>后端健康检查</h2>
+        <button onclick="testHealth()">测试健康检查</button>
+        <div id="health-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Dashboard API测试</h2>
+        <button onclick="testChartData()">测试图表数据</button>
+        <button onclick="testBarChartData()">测试柱状图数据</button>
+        <button onclick="testProgressData()">测试进度数据</button>
+        <div id="dashboard-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>用户认证测试</h2>
+        <button onclick="testLogin()">测试登录</button>
+        <div id="auth-result" class="result"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+
+        async function makeRequest(url, options = {}) {
+            try {
+                const response = await fetch(API_BASE + url, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...options.headers
+                    }
+                });
+                
+                const data = await response.json();
+                return {
+                    success: response.ok,
+                    status: response.status,
+                    data: data
+                };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error.message
+                };
+            }
+        }
+
+        function displayResult(elementId, result) {
+            const element = document.getElementById(elementId);
+            element.className = 'result ' + (result.success ? 'success' : 'error');
+            element.textContent = JSON.stringify(result, null, 2);
+        }
+
+        async function testHealth() {
+            const result = await makeRequest('/api/test/health');
+            displayResult('health-result', result);
+        }
+
+        async function testChartData() {
+            const result = await makeRequest('/api/dashboard/chart-data');
+            displayResult('dashboard-result', result);
+        }
+
+        async function testBarChartData() {
+            const result = await makeRequest('/api/dashboard/bar-chart-data');
+            displayResult('dashboard-result', result);
+        }
+
+        async function testProgressData() {
+            const result = await makeRequest('/api/dashboard/progress-data');
+            displayResult('dashboard-result', result);
+        }
+
+        async function testLogin() {
+            const result = await makeRequest('/api/auth/signin', {
+                method: 'POST',
+                body: JSON.stringify({
+                    username: 'admin',
+                    password: 'admin123'
+                })
+            });
+            displayResult('auth-result', result);
+        }
+
+        // 页面加载时自动测试健康检查
+        window.onload = function() {
+            testHealth();
+        };
+    </script>
+</body>
+</html>

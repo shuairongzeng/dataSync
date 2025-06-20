@@ -212,7 +212,6 @@
                 <version>${spring-boot.version}</version>
                 <configuration>
                     <mainClass>com.dbsync.dbsync.DbsyncApplication</mainClass>
-                    <skip>true</skip>
                 </configuration>
                 <executions>
                     <execution>
