@@ -82,6 +82,27 @@ export interface LogQueryParams {
   keyword?: string;
 }
 
+// 日志级别常量
+export const LOG_LEVELS = [
+  { label: '全部', value: '' },
+  { label: 'DEBUG', value: 'DEBUG' },
+  { label: 'INFO', value: 'INFO' },
+  { label: 'WARN', value: 'WARN' },
+  { label: 'ERROR', value: 'ERROR' }
+];
+
+// 系统模块常量
+export const SYSTEM_MODULES = [
+  { label: '全部', value: '' },
+  { label: '用户管理', value: 'USER' },
+  { label: '角色管理', value: 'ROLE' },
+  { label: '菜单管理', value: 'MENU' },
+  { label: '部门管理', value: 'DEPT' },
+  { label: '数据库连接', value: 'DATABASE' },
+  { label: '查询执行', value: 'QUERY' },
+  { label: '系统监控', value: 'MONITOR' }
+];
+
 type Result = {
   success: boolean;
   data?: Array<any>;

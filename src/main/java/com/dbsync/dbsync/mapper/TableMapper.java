@@ -107,4 +107,13 @@ public interface TableMapper {
      */
     @SelectProvider(type = TableMetadataSqlProvider.class, method = "checkPgTableExists")
     long checkPgTableExists(@Param("tableName") String tableName);
+
+    /**
+     * 检查 PostgreSQL 表是否存在（集群感知版本）
+     * @param tableName 要检查的表名
+     * @param schemaName 模式名称
+     * @return 包含表存在信息和统计信息的Map
+     */
+    @SelectProvider(type = TableMetadataSqlProvider.class, method = "checkPgTableExistsClusterAware")
+    Map<String, Object> checkPgTableExistsClusterAware(@Param("tableName") String tableName, @Param("schemaName") String schemaName);
 }

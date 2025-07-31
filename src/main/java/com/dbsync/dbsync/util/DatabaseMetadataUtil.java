@@ -91,9 +91,11 @@ public class DatabaseMetadataUtil {
     private static List<String> getMySQLTables(Connection connection, String schemaName, String databaseName) throws SQLException {
         List<String> tables = new ArrayList<>();
         String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : databaseName;
-        
+
         String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            // 设置查询超时时间（45秒）
+            stmt.setQueryTimeout(45);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -160,9 +162,11 @@ public class DatabaseMetadataUtil {
     private static List<String> getPostgreSQLTables(Connection connection, String schemaName) throws SQLException {
         List<String> tables = new ArrayList<>();
         String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : "public";
-        
+
         String sql = "SELECT tablename FROM pg_tables WHERE schemaname = ? ORDER BY tablename";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            // 设置查询超时时间（45秒）
+            stmt.setQueryTimeout(45);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -237,6 +241,8 @@ public class DatabaseMetadataUtil {
         }
         
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            // 设置查询超时时间（45秒）
+            stmt.setQueryTimeout(45);
             if (schemaName != null && !schemaName.trim().isEmpty()) {
                 stmt.setString(1, schemaName.toUpperCase());
             }
@@ -317,9 +323,11 @@ public class DatabaseMetadataUtil {
     private static List<String> getSQLServerTables(Connection connection, String schemaName) throws SQLException {
         List<String> tables = new ArrayList<>();
         String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : "dbo";
-        
+
         String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            // 设置查询超时时间（45秒）
+            stmt.setQueryTimeout(45);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {

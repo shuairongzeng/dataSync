@@ -153,21 +153,8 @@ public class DatabaseSyncService {
                 // Fetch table comment if not provided (and if needed for DDL)
                 // ... (logic for tableComment fetching if necessary) ...
 
-                String createTableSql = generateCreateTableSql(tableName, sourceStructure, tableComment, sourceColumnComments);
-                logger.debug("Task [{}], Table [{}]: Create table SQL: {}", taskId, tableName, createTableSql);
-                targetMapper.executeDDL(createTableSql);
-
-                // Add comments if applicable (PostgreSQL example)
-                if (this.targetDbType.equals("postgresql")) { // Example, make this more generic
-                    if (tableComment != null && !tableComment.isEmpty()) {
-                        targetMapper.executeDDL(String.format("COMMENT ON TABLE %s IS '%s'", targetTableNameForCheck, tableComment.replace("'", "''")));
-                    }
-                    for (Map<String, String> comment : sourceColumnComments) {
-                        if (comment.get("COMMENTS") != null && !comment.get("COMMENTS").isEmpty()) {
-                            targetMapper.executeDDL(String.format("COMMENT ON COLUMN %s.%s IS '%s'", targetTableNameForCheck, comment.get("COLUMN_NAME").toLowerCase(), comment.get("COMMENTS").replace("'", "''")));
-                        }
-                    }
-                }
+                // Execute DDL operations with proper transaction management for clusters
+                executeDDLWithClusterSupport(taskId, targetSession, tableName, sourceStructure, tableComment, sourceColumnComments, targetTableNameForCheck);
                 logger.info("Task [{}], Table [{}]: Structure created.", taskId, tableName);
             } else if (truncateBeforeSync) {
                 logger.info("Task [{}], Table [{}]: Exists in target, truncating data before sync.", taskId, tableName);
@@ -372,6 +359,169 @@ public class DatabaseSyncService {
         }
     }
 
+    /**
+     * Wait for table replication across PostgreSQL cluster nodes
+     * This method ensures that DDL operations are properly synchronized before DML operations
+     */
+    private void waitForTableReplication(String taskId, SqlSession targetSession, String tableName) throws Exception {
+        TableMapper targetMapper = targetSession.getMapper(TableMapper.class);
+        int maxRetries = 10;
+        int retryDelayMs = 1000; // 1 second
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                // Use cluster-aware table existence check
+                Map<String, Object> tableInfo = targetMapper.checkPgTableExistsClusterAware(tableName, this.targetSchemaName);
+
+                if (tableInfo != null) {
+                    Number tableCount = (Number) tableInfo.get("table_count");
+                    Number statsCount = (Number) tableInfo.get("stats_count");
+
+                    if (tableCount != null && tableCount.longValue() > 0 &&
+                        statsCount != null && statsCount.longValue() > 0) {
+                        logger.debug("Task [{}], Table [{}]: Table replication confirmed on attempt {} (table_count: {}, stats_count: {})",
+                            taskId, tableName, attempt, tableCount, statsCount);
+                        return;
+                    }
+
+                    logger.debug("Task [{}], Table [{}]: Table partially replicated on attempt {} (table_count: {}, stats_count: {})",
+                        taskId, tableName, attempt, tableCount, statsCount);
+                }
+            } catch (Exception e) {
+                logger.warn("Task [{}], Table [{}]: Table existence check failed on attempt {}: {}",
+                    taskId, tableName, attempt, e.getMessage());
+            }
+
+            if (attempt < maxRetries) {
+                logger.info("Task [{}], Table [{}]: Waiting for table replication, attempt {} of {}",
+                    taskId, tableName, attempt, maxRetries);
+                try {
+                    Thread.sleep(retryDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new Exception("Table replication wait interrupted", ie);
+                }
+            }
+        }
+
+        throw new Exception(String.format("Table %s replication not confirmed after %d attempts", tableName, maxRetries));
+    }
+
+    /**
+     * Check if a column is a pagination/row number column that should be excluded from INSERT
+     */
+    private boolean isPaginationColumn(String columnName) {
+        if (columnName == null) {
+            return true;
+        }
+
+        String lowerColumnName = columnName.toLowerCase();
+
+        // Known pagination columns from different databases
+        return lowerColumnName.equals("rnum") ||
+               lowerColumnName.equals("rownum") ||
+               lowerColumnName.equals("rnum_") ||
+               lowerColumnName.equals("rn") ||
+               lowerColumnName.equals("row_number") ||
+               lowerColumnName.startsWith("__") || // System columns
+               lowerColumnName.endsWith("_rownum"); // Custom row number columns
+    }
+
+    /**
+     * Check if the error message indicates a PostgreSQL cluster-related issue
+     */
+    private boolean isPostgreSQLClusterError(String errorMessage) {
+        if (errorMessage == null) {
+            return false;
+        }
+
+        String lowerError = errorMessage.toLowerCase();
+        return lowerError.contains("relation") && lowerError.contains("does not exist") && lowerError.contains("node") ||
+               lowerError.contains("cluster") ||
+               lowerError.contains("replication") ||
+               lowerError.contains("connection refused") ||
+               lowerError.contains("connection reset") ||
+               lowerError.contains("server closed the connection unexpectedly");
+    }
+
+    /**
+     * Validate table existence using direct SQL connection
+     */
+    private boolean validateTableExistence(Connection conn, String tableName, String schemaName) throws Exception {
+        String sql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ? AND table_schema = COALESCE(?, current_schema())";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, tableName.toLowerCase());
+            stmt.setString(2, schemaName);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1) > 0;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Execute DDL operations with proper transaction management for PostgreSQL clusters
+     */
+    private void executeDDLWithClusterSupport(String taskId, SqlSession targetSession, String tableName,
+                                            List<Map<String, Object>> sourceStructure, String tableComment,
+                                            List<Map<String, String>> sourceColumnComments, String targetTableNameForCheck) throws Exception {
+        TableMapper targetMapper = targetSession.getMapper(TableMapper.class);
+
+        try {
+            // Start explicit transaction for DDL operations
+            logger.debug("Task [{}], Table [{}]: Starting DDL transaction", taskId, tableName);
+
+            // Generate and execute CREATE TABLE statement
+            String createTableSql = generateCreateTableSql(tableName, sourceStructure, tableComment, sourceColumnComments);
+            logger.debug("Task [{}], Table [{}]: Create table SQL: {}", taskId, tableName, createTableSql);
+            targetMapper.executeDDL(createTableSql);
+
+            // Add table comments if applicable
+            if ("postgresql".equalsIgnoreCase(this.targetDbType) || "vastbase".equalsIgnoreCase(this.targetDbType)) {
+                if (tableComment != null && !tableComment.isEmpty()) {
+                    String tableCommentSql = String.format("COMMENT ON TABLE %s IS '%s'",
+                        targetTableNameForCheck, tableComment.replace("'", "''"));
+                    logger.debug("Task [{}], Table [{}]: Adding table comment: {}", taskId, tableName, tableCommentSql);
+                    targetMapper.executeDDL(tableCommentSql);
+                }
+
+                // Add column comments
+                for (Map<String, String> comment : sourceColumnComments) {
+                    if (comment.get("COMMENTS") != null && !comment.get("COMMENTS").isEmpty()) {
+                        String columnCommentSql = String.format("COMMENT ON COLUMN %s.%s IS '%s'",
+                            targetTableNameForCheck,
+                            comment.get("COLUMN_NAME").toLowerCase(),
+                            comment.get("COMMENTS").replace("'", "''"));
+                        logger.debug("Task [{}], Table [{}]: Adding column comment: {}", taskId, tableName, columnCommentSql);
+                        targetMapper.executeDDL(columnCommentSql);
+                    }
+                }
+            }
+
+            // Commit DDL transaction
+            targetSession.commit();
+            logger.debug("Task [{}], Table [{}]: DDL transaction committed", taskId, tableName);
+
+            // For PostgreSQL clusters, ensure table creation is synchronized across all nodes
+            if ("postgresql".equalsIgnoreCase(this.targetDbType) || "vastbase".equalsIgnoreCase(this.targetDbType)) {
+                waitForTableReplication(taskId, targetSession, tableName);
+            }
+
+        } catch (Exception e) {
+            logger.error("Task [{}], Table [{}]: DDL operation failed, rolling back transaction: {}",
+                taskId, tableName, e.getMessage());
+            try {
+                targetSession.rollback();
+            } catch (Exception rollbackError) {
+                logger.warn("Task [{}], Table [{}]: Failed to rollback DDL transaction: {}",
+                    taskId, tableName, rollbackError.getMessage());
+            }
+            throw e;
+        }
+    }
+
     private int executeAndReportBatchInsert(String taskId, String progressIdentifier,
                                             String targetTableName, List<Map<String, Object>> batchData,
                                             SqlSessionFactory currentTargetFactory) throws Exception {
@@ -382,17 +532,21 @@ public class DatabaseSyncService {
         JdbcTemplate jdbcTemplate = new JdbcTemplate(targetDataSource);
 
         Map<String, Object> firstRow = batchData.get(0);
+
+        // More precise column filtering - only exclude known pagination/row number columns
         List<String> finalColumns = firstRow.keySet().stream()
-                .filter(column -> !column.equalsIgnoreCase("rnum") && !column.equalsIgnoreCase("rownum"))
-                .filter(column -> !column.equalsIgnoreCase("rnum_")) // 过滤掉 rnum_
-                .filter(column -> !column.equalsIgnoreCase("rn")) // 过滤掉 rn
+                .filter(column -> !isPaginationColumn(column))
+                .sorted() // Sort columns for consistent INSERT order
                 .collect(Collectors.toList());
 
         if (finalColumns.isEmpty()) {
-            logger.warn("Task [{}], ProgressID [{}]: No columns found for batch insert. Skipping batch.",
-                    taskId, progressIdentifier);
+            logger.warn("Task [{}], ProgressID [{}]: No columns found for batch insert after filtering. Available columns: {}. Skipping batch.",
+                    taskId, progressIdentifier, firstRow.keySet());
             return 0;
         }
+
+        logger.debug("Task [{}], ProgressID [{}]: Using columns for batch insert: {}",
+                taskId, progressIdentifier, finalColumns);
 //        List<String> filteredColumns = columns.stream()
 //                .filter(column -> !column.equalsIgnoreCase("rnum_")) // 过滤掉 rnum_
 //                .filter(column -> !column.equalsIgnoreCase("rn")) // 过滤掉 rn
@@ -440,8 +594,31 @@ public class DatabaseSyncService {
             return totalRowsAffected;
 
         } catch (Exception e) {
-            logger.error("Task [{}], ProgressID [{}], Table [{}]: Error during batch insert. SQL: [{}], Error: {}",
-                    taskId, progressIdentifier, targetTableName, sql, e.getMessage(), e);
+            // Enhanced error handling for PostgreSQL cluster issues
+            String errorMessage = e.getMessage();
+            boolean isClusterIssue = isPostgreSQLClusterError(errorMessage);
+
+            if (isClusterIssue) {
+                logger.error("Task [{}], ProgressID [{}], Table [{}]: PostgreSQL cluster error detected during batch insert. " +
+                        "SQL: [{}], Error: {}, Columns: {}, Batch size: {}",
+                        taskId, progressIdentifier, targetTableName, sql, errorMessage, finalColumns, batchData.size());
+
+                // Try to validate table existence on current connection
+                try {
+                    try (Connection conn = targetDataSource.getConnection()) {
+                        boolean tableExists = validateTableExistence(conn, targetTableName, this.targetSchemaName);
+                        logger.error("Task [{}], Table [{}]: Table existence validation result: {}",
+                            taskId, targetTableName, tableExists);
+                    }
+                } catch (Exception validationError) {
+                    logger.warn("Task [{}], Table [{}]: Could not validate table existence: {}",
+                        taskId, targetTableName, validationError.getMessage());
+                }
+            } else {
+                logger.error("Task [{}], ProgressID [{}], Table [{}]: Error during batch insert. SQL: [{}], Error: {}",
+                        taskId, progressIdentifier, targetTableName, sql, errorMessage, e);
+            }
+
             // Removed completeTableSync, caller will handle it.
             throw e; // Rethrow the exception
         }

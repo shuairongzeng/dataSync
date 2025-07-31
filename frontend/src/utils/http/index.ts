@@ -21,8 +21,8 @@ const { VITE_BASE_API } = import.meta.env;
 const defaultConfig: AxiosRequestConfig = {
   // 设置API基础地址
   baseURL: VITE_BASE_API || "",
-  // 请求超时时间
-  timeout: 10000,
+  // 请求超时时间 - 增加到30秒以支持数据库操作
+  timeout: 30000,
   headers: {
     Accept: "application/json, text/plain, */*",
     "Content-Type": "application/json",

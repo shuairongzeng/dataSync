@@ -200,6 +200,25 @@ public class TableMetadataSqlProvider {
             WHERE("table_schema = current_schema()");
         }}.toString();
     }
+
+    /**
+     * Check if PostgreSQL table exists with cluster-aware validation
+     * This method includes additional checks for cluster environments
+     */
+    public String checkPgTableExistsClusterAware(@Param("tableName") String tableName, @Param("schemaName") String schemaName) {
+        return new SQL() {{
+            SELECT("COUNT(*) as table_count, " +
+                   "CASE WHEN COUNT(*) > 0 THEN " +
+                   "  (SELECT COUNT(*) FROM pg_stat_user_tables WHERE relname = LOWER(#{tableName}) AND schemaname = COALESCE(#{schemaName}, current_schema())) " +
+                   "ELSE 0 END as stats_count");
+            FROM("information_schema.tables");
+            WHERE("table_name = LOWER(#{tableName})");
+            AND();
+            WHERE("table_schema = COALESCE(#{schemaName}, current_schema())");
+            AND();
+            WHERE("table_type = 'BASE TABLE'");
+        }}.toString();
+    }
     
     // Helper for SQL Server pagination to get a sort key if not provided
     // This is complex and context-dependent, so not fully implemented here.

@@ -9,9 +9,9 @@ import java.util.List;
 
 /**
  * 查询历史数据访问接口
+ * 注意：此Mapper使用auth数据源（SQLite），不是主数据源
  */
 @Repository
-@Mapper
 public interface QueryHistoryMapper extends BaseMapper<QueryHistory> {
     
     /**
@@ -57,8 +57,10 @@ public interface QueryHistoryMapper extends BaseMapper<QueryHistory> {
             "target_connection_id, target_connection_name, target_table_name, target_schema_name, " +
             "executed_at, execution_time, status, error_message, result_rows, created_by) " +
             "VALUES (#{sql}, #{sourceConnectionId}, #{sourceConnectionName}, " +
-            "#{targetConnectionId}, #{targetConnectionName}, #{targetTableName}, #{targetSchemaName}, " +
-            "#{executedAt}, #{executionTime}, #{status}, #{errorMessage}, #{resultRows}, #{createdBy})")
+            "#{targetConnectionId,jdbcType=BIGINT}, #{targetConnectionName,jdbcType=VARCHAR}, " +
+            "#{targetTableName,jdbcType=VARCHAR}, #{targetSchemaName,jdbcType=VARCHAR}, " +
+            "#{executedAt}, #{executionTime}, #{status}, #{errorMessage,jdbcType=VARCHAR}, " +
+            "#{resultRows,jdbcType=INTEGER}, #{createdBy,jdbcType=VARCHAR})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insertQueryHistory(QueryHistory queryHistory);
     

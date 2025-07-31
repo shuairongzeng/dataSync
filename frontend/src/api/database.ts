@@ -2,7 +2,7 @@ import { http } from "@/utils/http";
 
 // 数据库配置类型
 export interface DbConfig {
-  id?: string;
+  id?: number;
   name: string;
   dbType: string;
   host: string;
@@ -12,6 +12,9 @@ export interface DbConfig {
   password: string;
   schema?: string;
   description?: string;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // 数据库连接测试请求
@@ -70,7 +73,11 @@ export const testDbConnectionApi = (data: DbTestRequest) => {
 /** 获取数据库表列表 */
 export const getDbTablesApi = (connectionId: string, schema?: string) => {
   const params = schema ? { schema } : {};
-  return http.request<string[]>("get", `/api/database/connections/${connectionId}/tables`, { params });
+  // 数据库表列表加载可能需要更长时间，特别是对于大型数据库
+  return http.request<string[]>("get", `/api/database/connections/${connectionId}/tables`, {
+    params,
+    timeout: 60000 // 60秒超时，专门用于表列表加载
+  });
 };
 
 /** 获取表结构信息 */
@@ -161,6 +168,7 @@ export interface CustomQueryRequest {
 export interface QueryResult {
   columns: string[];
   rows: any[][];
+  data?: any[]; // 转换后的对象数组格式，用于前端表格显示
   totalRows: number;
   executionTime: number;
   message?: string;
@@ -183,15 +191,16 @@ export const executeCustomQueryApi = (data: CustomQueryRequest) => {
   return http.request<any>("post", "/api/custom-query/execute-and-save", { data });
 };
 
-/** 执行SQL查询（仅查询，不保存） */
+/** 执行 SQL 查询（仅查询，不保存） */
 export const executeSqlQueryApi = (connectionId: string, sql: string, schema?: string) => {
   const data = { sql, schema };
   return http.request<QueryResult>("post", `/api/database/connections/${connectionId}/query`, { data });
 };
 
 /** 获取查询历史 */
-export const getQueryHistoryApi = () => {
-  return http.request<QueryHistory[]>("get", "/api/query/history");
+export const getQueryHistoryApi = (connectionId?: string) => {
+  const params = connectionId ? { connectionId } : {};
+  return http.request<QueryHistory[]>("get", "/api/query/history", { params });
 };
 
 /** 保存查询到历史 */
@@ -203,3 +212,67 @@ export const saveQueryHistoryApi = (data: Omit<QueryHistory, 'id' | 'executedAt'
 export const deleteQueryHistoryApi = (id: string) => {
   return http.request<any>("delete", `/api/query/history/${id}`);
 };
+
+/** 获取数据库表列表 */
+// 分页获取表列表
+export const getTablesWithPaginationApi = (connectionId: string, params?: {
+  page?: number;
+  size?: number;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  schema?: string;
+}) => {
+  return http.request<any>("get", `/api/database/connections/${connectionId}/tables/page`, {
+    params,
+    timeout: 45000 // 45秒超时，用于分页表列表加载
+  });
+};
+
+// 获取所有表列表（保持向后兼容）
+export const getTablesApi = (connectionId: string, schema?: string) => {
+  const params = schema ? { schema } : {};
+  return http.request<string[]>("get", `/api/database/connections/${connectionId}/tables`, { params });
+};
+
+/** 获取表结构信息 */
+export const getTableColumnsApi = (connectionId: string, tableName: string, schema?: string) => {
+  const params = schema ? { schema } : {};
+  return http.request<any[]>("get", `/api/database/connections/${connectionId}/tables/${tableName}/columns`, {
+    params,
+    timeout: 30000 // 30秒超时，用于表结构获取
+  });
+};
+
+/** 获取数据库Schema列表 */
+export const getSchemasApi = (connectionId: string) => {
+  return http.request<string[]>("get", `/api/database/connections/${connectionId}/schemas`, {
+    timeout: 30000 // 30秒超时，用于Schema列表获取
+  });
+};
+
+/** 获取数据库连接列表 */
+export const getConnectionsApi = () => {
+  return http.request<DbConfig[]>("get", "/api/database/connections");
+};
+
+/** 检查数据库连接健康状态 */
+export const checkConnectionHealthApi = (connectionId: string) => {
+  return http.request<{healthy: boolean, message: string, timestamp: number}>(
+    "get",
+    `/api/database/connections/${connectionId}/health`,
+    {
+      timeout: 10000 // 10秒超时，用于健康检查
+    }
+  );
+};
+
+/** 执行SQL查询 */
+export const executeQueryApi = (connectionId: string, data: { sql: string; schema?: string }) => {
+  return http.request<QueryResult>("post", `/api/database/connections/${connectionId}/query`, {
+    data,
+    timeout: 60000 // 60秒超时，用于SQL查询执行
+  });
+};
+
+

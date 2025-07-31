@@ -14,12 +14,12 @@
       <!-- 任务列表 -->
       <el-table :data="taskList" style="width: 100%" v-loading="loading">
         <el-table-column prop="name" label="任务名称" width="150" />
-        <el-table-column label="源数据库" width="120">
+        <el-table-column label="源数据库" width="220">
           <template #default="{ row }">
             {{ getConnectionName(row.sourceConnectionId) }}
           </template>
         </el-table-column>
-        <el-table-column label="目标数据库" width="120">
+        <el-table-column label="目标数据库" width="220">
           <template #default="{ row }">
             {{ getConnectionName(row.targetConnectionId) }}
           </template>
@@ -63,7 +63,7 @@
             {{ row.lastRunAt ? formatTime(row.lastRunAt) : '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="450" fixed="right">
           <template #default="{ row }">
             <el-button 
               size="small" 
@@ -157,18 +157,35 @@
           <div class="w-full">
             <div class="flex items-center mb-2">
               <el-button size="small" @click="loadSourceTables" :loading="loadingTables">
-                加载源表列表
+                {{ loadingTables ? '加载中...' : '加载源表列表' }}
               </el-button>
               <span class="ml-2 text-sm text-gray-500">
                 已选择 {{ formData.tables.length }} 个表
+                <span v-if="sourceTableList.length > 0">
+                  / 共 {{ sourceTableList.length }} 个可用表
+                </span>
               </span>
             </div>
+
+            <!-- 加载状态提示 -->
+            <div v-if="loadingTables" class="mb-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-600">
+              <i class="el-icon-loading mr-1"></i>
+              正在加载表列表，请稍候...（大型数据库可能需要较长时间）
+            </div>
+
+            <!-- 表列表为空时的提示 -->
+            <div v-if="!loadingTables && sourceTableList.length === 0" class="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-600">
+              <i class="el-icon-warning mr-1"></i>
+              暂无可用表，请点击"加载源表列表"按钮获取表信息
+            </div>
+
             <el-transfer
               v-model="formData.tables"
               :data="sourceTableList"
               :titles="['可用表', '同步表']"
               filterable
               filter-placeholder="搜索表名"
+              :disabled="loadingTables"
             />
           </div>
         </el-form-item>
@@ -226,7 +243,8 @@ import {
   getSyncTaskProgressApi,
   getSyncTaskLogsApi,
   getDbConnectionsApi,
-  getDbTablesApi
+  getDbTablesApi,
+  checkConnectionHealthApi
 } from "@/api/database";
 
 defineOptions({
@@ -307,24 +325,7 @@ const formatTime = (timeStr: string) => {
 const fetchTasks = async () => {
   loading.value = true;
   try {
-    // 暂时使用模拟数据
-    taskList.value = [
-      {
-        id: "1",
-        name: "用户数据同步",
-        sourceConnectionId: "1",
-        targetConnectionId: "2",
-        sourceSchemaName: "public",
-        targetSchemaName: "backup",
-        tables: ["users", "user_profiles"],
-        truncateBeforeSync: true,
-        status: 'COMPLETED_SUCCESS',
-        progress: 100,
-        totalTables: 2,
-        completedTables: 2,
-        lastRunAt: new Date().toISOString()
-      }
-    ];
+    taskList.value = await getSyncTasksApi();
   } catch (error) {
     ElMessage.error("获取任务列表失败");
   } finally {
@@ -335,61 +336,86 @@ const fetchTasks = async () => {
 // 获取连接列表
 const fetchConnections = async () => {
   try {
-    // 暂时使用模拟数据
-    connectionList.value = [
-      {
-        id: "1",
-        name: "本地MySQL",
-        dbType: "mysql",
-        host: "localhost",
-        port: 3306,
-        database: "test",
-        username: "root",
-        password: "******"
-      },
-      {
-        id: "2",
-        name: "备份PostgreSQL",
-        dbType: "postgresql",
-        host: "backup-server",
-        port: 5432,
-        database: "backup_db",
-        username: "postgres",
-        password: "******"
-      }
-    ];
+    connectionList.value = await getDbConnectionsApi();
   } catch (error) {
     ElMessage.error("获取连接列表失败");
   }
 };
 
-// 加载源表列表
-const loadSourceTables = async () => {
+// 表列表缓存
+const tableListCache = new Map<string, { tables: any[], timestamp: number }>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+
+// 加载源表列表（支持缓存和重试）
+const loadSourceTables = async (retryCount = 0) => {
   if (!formData.sourceConnectionId) {
     ElMessage.warning("请先选择源数据库");
     return;
   }
-  
+
+  const cacheKey = `${formData.sourceConnectionId}_${formData.sourceSchemaName || 'default'}`;
+  const cached = tableListCache.get(cacheKey);
+
+  // 检查缓存是否有效
+  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+    sourceTableList.value = cached.tables;
+    ElMessage.success("表列表加载成功（来自缓存）");
+    return;
+  }
+
   loadingTables.value = true;
   try {
-    // 暂时使用模拟数据
-    const tables = ["users", "user_profiles", "orders", "products", "categories"];
-    sourceTableList.value = tables.map(table => ({
+    // 先进行连接健康检查
+    try {
+      const healthResult = await checkConnectionHealthApi(formData.sourceConnectionId.toString());
+      if (!healthResult.healthy) {
+        throw new Error(`数据库连接异常: ${healthResult.message}`);
+      }
+    } catch (healthError: any) {
+      throw new Error(`连接健康检查失败: ${healthError.message || '无法连接到数据库'}`);
+    }
+
+    const tables = await getDbTablesApi(formData.sourceConnectionId.toString(), formData.sourceSchemaName);
+    const tableOptions = tables.map(table => ({
       key: table,
       label: table
     }));
-    ElMessage.success("表列表加载成功");
-  } catch (error) {
-    ElMessage.error("加载表列表失败");
+
+    sourceTableList.value = tableOptions;
+
+    // 更新缓存
+    tableListCache.set(cacheKey, {
+      tables: tableOptions,
+      timestamp: Date.now()
+    });
+
+    ElMessage.success(`表列表加载成功（共${tables.length}个表）`);
+  } catch (error: any) {
+    console.error("加载表列表失败:", error);
+
+    // 如果是超时错误且重试次数少于2次，则自动重试
+    if (error.message?.includes('timeout') && retryCount < 2) {
+      ElMessage.warning(`加载超时，正在重试... (${retryCount + 1}/2)`);
+      setTimeout(() => {
+        loadSourceTables(retryCount + 1);
+      }, 2000);
+      return;
+    }
+
+    ElMessage.error(`加载表列表失败: ${error.message || '未知错误'}`);
   } finally {
     loadingTables.value = false;
   }
 };
 
-// 源数据库改变时清空表选择
+// 源数据库改变时清空表选择和缓存
 const handleSourceChange = () => {
   formData.tables = [];
   sourceTableList.value = [];
+
+  // 清除相关缓存
+  const oldCacheKey = `${formData.sourceConnectionId}_${formData.sourceSchemaName || 'default'}`;
+  tableListCache.delete(oldCacheKey);
 };
 
 // 新增任务
@@ -419,10 +445,13 @@ const handleDelete = async (row: SyncTask) => {
       }
     );
     
+    await deleteSyncTaskApi(row.id!.toString());
     ElMessage.success("删除成功");
     fetchTasks();
-  } catch (error) {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || "删除失败");
+    }
   }
 };
 
@@ -439,15 +468,19 @@ const handleExecute = async (row: SyncTask) => {
       }
     );
     
+    await executeSyncTaskApi(row.id!.toString());
     ElMessage.success("任务已开始执行");
+    
     // 更新任务状态为执行中
     row.status = 'RUNNING';
     row.progress = 0;
     
     // 开始轮询进度
     startProgressPolling();
-  } catch (error) {
-    // 用户取消执行
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || "执行失败");
+    }
   }
 };
 
@@ -464,11 +497,14 @@ const handleStop = async (row: SyncTask) => {
       }
     );
     
+    await stopSyncTaskApi(row.id!.toString());
     ElMessage.success("任务已停止");
     row.status = 'FAILED';
     stopProgressPolling();
-  } catch (error) {
-    // 用户取消停止
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || "停止失败");
+    }
   }
 };
 
@@ -482,17 +518,7 @@ const handleViewLogs = async (row: SyncTask) => {
 // 刷新日志
 const refreshLogs = async () => {
   try {
-    // 暂时使用模拟数据
-    taskLogs.value = [
-      `[${new Date().toLocaleString()}] 任务开始执行`,
-      `[${new Date().toLocaleString()}] 连接源数据库成功`,
-      `[${new Date().toLocaleString()}] 连接目标数据库成功`,
-      `[${new Date().toLocaleString()}] 开始同步表: users`,
-      `[${new Date().toLocaleString()}] 表 users 同步完成，共 1000 条记录`,
-      `[${new Date().toLocaleString()}] 开始同步表: user_profiles`,
-      `[${new Date().toLocaleString()}] 表 user_profiles 同步完成，共 1000 条记录`,
-      `[${new Date().toLocaleString()}] 任务执行完成`
-    ];
+    taskLogs.value = await getSyncTaskLogsApi(currentLogTaskId.value);
   } catch (error) {
     ElMessage.error("获取日志失败");
   }
@@ -501,21 +527,31 @@ const refreshLogs = async () => {
 // 开始进度轮询
 const startProgressPolling = () => {
   progressTimer.value = setInterval(async () => {
-    // 模拟进度更新
     const runningTasks = taskList.value.filter(t => t.status === 'RUNNING');
-    runningTasks.forEach(task => {
-      if (task.progress! < 100) {
-        task.progress = Math.min((task.progress || 0) + 10, 100);
-        task.completedTables = Math.floor((task.progress / 100) * (task.totalTables || 1));
-        
-        if (task.progress === 100) {
-          task.status = 'COMPLETED_SUCCESS';
-        }
-      }
-    });
     
     if (runningTasks.length === 0) {
       stopProgressPolling();
+      return;
+    }
+    
+    // 获取每个运行中任务的真实进度
+    for (const task of runningTasks) {
+      try {
+        const progress = await getSyncTaskProgressApi(task.id!.toString());
+        // 更新任务进度
+        task.progress = progress.progress;
+        task.completedTables = progress.completedTables;
+        task.totalTables = progress.totalTables;
+        task.status = progress.status;
+        
+        // 如果任务已完成或失败，停止轮询
+        if (task.status === 'COMPLETED_SUCCESS' || task.status === 'FAILED') {
+          stopProgressPolling();
+          break;
+        }
+      } catch (error) {
+        console.error('获取进度失败：', error);
+      }
     }
   }, 2000);
 };
@@ -537,15 +573,17 @@ const handleSubmit = async () => {
     submitLoading.value = true;
     
     if (isEdit.value) {
+      await updateSyncTaskApi(formData.id!.toString(), formData);
       ElMessage.success("更新成功");
     } else {
+      await createSyncTaskApi(formData);
       ElMessage.success("创建成功");
     }
     
     dialogVisible.value = false;
     fetchTasks();
-  } catch (error) {
-    ElMessage.error("保存失败");
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || "保存失败");
   } finally {
     submitLoading.value = false;
   }

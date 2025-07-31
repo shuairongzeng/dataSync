@@ -37,6 +37,10 @@ public class AuthDataSourceConfig {
 
         // 手动添加Mapper
         configuration.addMapper(com.dbsync.dbsync.mapper.auth.UserMapper.class);
+        configuration.addMapper(com.dbsync.dbsync.mapper.auth.DbConnectionMapper.class);
+        configuration.addMapper(com.dbsync.dbsync.mapper.auth.SyncTaskMapper.class);
+        configuration.addMapper(com.dbsync.dbsync.mapper.auth.SyncTaskLogMapper.class);
+        configuration.addMapper(com.dbsync.dbsync.mapper.QueryHistoryMapper.class);
 
         bean.setConfiguration(configuration);
         return bean.getObject();
@@ -50,6 +54,26 @@ public class AuthDataSourceConfig {
     @Bean(name = "userMapper")
     public com.dbsync.dbsync.mapper.auth.UserMapper userMapper() throws Exception {
         return authSqlSessionTemplate().getMapper(com.dbsync.dbsync.mapper.auth.UserMapper.class);
+    }
+
+    @Bean(name = "dbConnectionMapper")
+    public com.dbsync.dbsync.mapper.auth.DbConnectionMapper dbConnectionMapper() throws Exception {
+        return authSqlSessionTemplate().getMapper(com.dbsync.dbsync.mapper.auth.DbConnectionMapper.class);
+    }
+
+    @Bean(name = "syncTaskMapper")
+    public com.dbsync.dbsync.mapper.auth.SyncTaskMapper syncTaskMapper() throws Exception {
+        return authSqlSessionTemplate().getMapper(com.dbsync.dbsync.mapper.auth.SyncTaskMapper.class);
+    }
+
+    @Bean(name = "syncTaskLogMapper")
+    public com.dbsync.dbsync.mapper.auth.SyncTaskLogMapper syncTaskLogMapper() throws Exception {
+        return authSqlSessionTemplate().getMapper(com.dbsync.dbsync.mapper.auth.SyncTaskLogMapper.class);
+    }
+
+    @Bean(name = "queryHistoryMapper")
+    public com.dbsync.dbsync.mapper.QueryHistoryMapper queryHistoryMapper() throws Exception {
+        return authSqlSessionTemplate().getMapper(com.dbsync.dbsync.mapper.QueryHistoryMapper.class);
     }
 
     @Bean

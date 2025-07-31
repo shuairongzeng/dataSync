@@ -26,7 +26,7 @@
         <el-table-column prop="database" label="数据库名" width="120" />
         <el-table-column prop="username" label="用户名" width="100" />
         <el-table-column prop="description" label="描述" show-overflow-tooltip />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="handleTest(row)">测试连接</el-button>
             <el-button size="small" type="primary" @click="handleEdit(row)">编辑</el-button>
@@ -69,12 +69,12 @@
         </el-form-item>
 
         <el-row :gutter="20">
-          <el-col :span="16">
+          <el-col :span="12">
             <el-form-item label="主机地址" prop="host">
               <el-input v-model="formData.host" placeholder="请输入主机地址" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="10">
             <el-form-item label="端口" prop="port">
               <el-input-number 
                 v-model="formData.port" 
@@ -221,20 +221,7 @@ const handleDbTypeChange = (dbType: string) => {
 const fetchConnections = async () => {
   loading.value = true;
   try {
-    // 暂时使用模拟数据，等后端接口完成后替换
-    connectionList.value = [
-      {
-        id: "1",
-        name: "本地MySQL",
-        dbType: "mysql",
-        host: "localhost",
-        port: 3306,
-        database: "test",
-        username: "root",
-        password: "******",
-        description: "本地测试数据库"
-      }
-    ];
+    connectionList.value = await getDbConnectionsApi();
   } catch (error) {
     ElMessage.error("获取连接列表失败");
   } finally {
@@ -269,11 +256,14 @@ const handleDelete = async (row: DbConfig) => {
       }
     );
     
-    // 调用删除API
+    // 调用删除 API
+    await deleteDbConnectionApi(row.id!.toString());
     ElMessage.success("删除成功");
     fetchConnections();
-  } catch (error) {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || "删除失败");
+    }
   }
 };
 
@@ -291,13 +281,15 @@ const handleTest = async (row: DbConfig) => {
       schema: row.schema
     };
     
-    // 暂时模拟测试结果
-    setTimeout(() => {
-      ElMessage.success("连接测试成功");
-      testLoading.value = false;
-    }, 1000);
-  } catch (error) {
-    ElMessage.error("连接测试失败");
+    const result = await testDbConnectionApi(testData);
+    if (result.success) {
+      ElMessage.success(`连接测试成功 (${result.connectionTime}ms)`);
+    } else {
+      ElMessage.error(result.message);
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || "连接测试失败");
+  } finally {
     testLoading.value = false;
   }
 };
@@ -320,13 +312,16 @@ const handleTestConnection = async () => {
       schema: formData.schema
     };
     
-    // 暂时模拟测试结果
-    setTimeout(() => {
-      ElMessage.success("连接测试成功");
-      testLoading.value = false;
-    }, 1000);
-  } catch (error) {
-    ElMessage.error("请先完善连接信息");
+    const result = await testDbConnectionApi(testData);
+    if (result.success) {
+      ElMessage.success(`连接测试成功 (${result.connectionTime}ms)`);
+    } else {
+      ElMessage.error(result.message);
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || "请先完善连接信息");
+  } finally {
+    testLoading.value = false;
   }
 };
 
@@ -340,16 +335,18 @@ const handleSubmit = async () => {
     
     if (isEdit.value) {
       // 更新连接
+      await updateDbConnectionApi(formData.id!.toString(), formData);
       ElMessage.success("更新成功");
     } else {
       // 创建连接
+      await createDbConnectionApi(formData);
       ElMessage.success("创建成功");
     }
     
     dialogVisible.value = false;
     fetchConnections();
-  } catch (error) {
-    ElMessage.error("保存失败");
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || "保存失败");
   } finally {
     submitLoading.value = false;
   }
