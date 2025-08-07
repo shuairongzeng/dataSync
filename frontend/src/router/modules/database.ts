@@ -57,6 +57,15 @@ export default {
         title: "API连接测试",
         showParent: true
       }
+    },
+    {
+      path: "/database/sql-editor-test",
+      name: "SqlEditorTest",
+      component: () => import("@/views/test/sql-editor-test.vue"),
+      meta: {
+        title: "SQL编辑器测试",
+        showParent: true
+      }
     }
   ]
 } satisfies RouteConfigsTable;

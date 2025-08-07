@@ -83,12 +83,14 @@
           </div>
 
           <div class="editor-content">
-            <el-input
+            <SqlEditor
               v-model="sqlText"
-              type="textarea"
-              :rows="12"
+              :height="'300px'"
+              :tables="availableTables"
+              :table-columns="tableColumnsMap"
+              :enable-completion="true"
               placeholder="请输入SQL查询语句..."
-              class="sql-textarea"
+              @change="handleSqlChange"
             />
           </div>
         </div>
@@ -206,11 +208,14 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Delete, Clock, Search } from '@element-plus/icons-vue'
 import VirtualTableList from '@/components/VirtualTableList.vue'
+import SqlEditor from '@/components/SqlEditor/SqlEditor.vue'
 import {
   getConnectionsApi,
   getSchemasApi,
   executeQueryApi,
-  getQueryHistoryApi
+  getQueryHistoryApi,
+  getTablesApi,
+  getTableColumnsApi
 } from '@/api/database'
 
 // 响应式数据
@@ -224,6 +229,10 @@ const queryResult = ref<any>(null)
 const showHistory = ref(false)
 const historySearch = ref('')
 const queryHistory = ref<any[]>([])
+
+// 智能补全相关数据
+const availableTables = ref<string[]>([])
+const tableColumnsMap = ref<Map<string, string[]>>(new Map())
 
 // 计算属性
 const filteredHistory = computed(() => {
@@ -249,13 +258,19 @@ const handleConnectionChange = async () => {
     schemas.value = await getSchemasApi(selectedConnectionId.value)
     selectedSchema.value = ''
     queryResult.value = null
+
+    // 清空补全数据
+    availableTables.value = []
+    tableColumnsMap.value.clear()
   } catch (error: any) {
     ElMessage.error('加载 Schema 失败：' + (error.message || '未知错误'))
   }
 }
 
-const handleSchemaChange = () => {
+const handleSchemaChange = async () => {
   queryResult.value = null
+  // 加载表名和字段数据用于智能补全
+  await loadTablesForCompletion()
 }
 
 const handleTableClick = (tableName: string) => {
@@ -265,6 +280,40 @@ const handleTableClick = (tableName: string) => {
 
 const handleSqlGenerated = (sql: string) => {
   sqlText.value = sql
+}
+
+// 加载表名和字段数据用于智能补全
+const loadTablesForCompletion = async () => {
+  if (!selectedConnectionId.value) return
+
+  try {
+    // 获取表列表
+    const tables = await getTablesApi(selectedConnectionId.value, selectedSchema.value)
+    availableTables.value = tables.map((table: any) => table.name || table.tableName || table)
+
+    // 清空之前的字段映射
+    tableColumnsMap.value.clear()
+
+    // 获取每个表的字段信息（限制前10个表以避免性能问题）
+    const tablesToLoad = availableTables.value.slice(0, 10)
+    for (const tableName of tablesToLoad) {
+      try {
+        const columns = await getTableColumnsApi(selectedConnectionId.value, tableName, selectedSchema.value)
+        const columnNames = columns.map((col: any) => col.name || col.columnName || col)
+        tableColumnsMap.value.set(tableName.toLowerCase(), columnNames)
+      } catch (error) {
+        console.warn(`Failed to load columns for table ${tableName}:`, error)
+      }
+    }
+  } catch (error: any) {
+    console.error('Failed to load tables for completion:', error)
+  }
+}
+
+// SQL编辑器变化处理
+const handleSqlChange = (sql: string) => {
+  // 可以在这里添加SQL变化的处理逻辑
+  console.log('SQL changed:', sql)
 }
 
 const executeQuery = async () => {

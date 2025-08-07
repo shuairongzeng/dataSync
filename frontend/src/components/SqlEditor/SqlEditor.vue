@@ -4,13 +4,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { EditorView, basicSetup } from 'codemirror'
+import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { sql } from '@codemirror/lang-sql'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
-import { keymap } from '@codemirror/view'
-import { defaultKeymap } from '@codemirror/commands'
+import { autocompletion } from '@codemirror/autocomplete'
+import { defaultKeymap, history } from '@codemirror/commands'
 
 // Props定义
 interface Props {
@@ -20,6 +19,9 @@ interface Props {
   theme?: 'light' | 'dark'
   height?: string
   fontSize?: number
+  tables?: string[]
+  tableColumns?: Map<string, string[]>
+  enableCompletion?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -28,7 +30,10 @@ const props = withDefaults(defineProps<Props>(), {
   readonly: false,
   theme: 'light',
   height: '300px',
-  fontSize: 14
+  fontSize: 14,
+  tables: () => [],
+  tableColumns: () => new Map(),
+  enableCompletion: true
 })
 
 // Emits定义
@@ -48,17 +53,16 @@ let editorView: EditorView | null = null
 // 创建编辑器状态
 const createEditorState = (content: string) => {
   const extensions = [
-    basicSetup,
+    // 基础功能
+    lineNumbers(),
+    highlightActiveLine(),
+    history(),
+    keymap.of(defaultKeymap),
+
+    // SQL 语言支持
     sql(),
-    autocompletion({
-      activateOnTyping: true,
-      maxRenderedOptions: 10,
-      defaultKeymap: true
-    }),
-    keymap.of([
-      ...defaultKeymap,
-      ...completionKeymap
-    ]),
+
+    // 更新监听器
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         const newValue = update.state.doc.toString()
@@ -66,14 +70,14 @@ const createEditorState = (content: string) => {
         emit('change', newValue)
       }
     }),
-    EditorView.focusChangeEffect.of((state, focusing) => {
-      if (focusing) {
-        emit('focus')
-      } else {
-        emit('blur')
-      }
-      return null
+
+    // 事件处理
+    EditorView.domEventHandlers({
+      focus: () => emit('focus'),
+      blur: () => emit('blur')
     }),
+
+    // 主题样式
     EditorView.theme({
       '&': {
         fontSize: `${props.fontSize}px`,
@@ -98,7 +102,25 @@ const createEditorState = (content: string) => {
     })
   ]
 
-  // 根据主题添加暗色主题
+  // 添加只读状态
+  if (props.readonly) {
+    extensions.push(EditorState.readOnly.of(true))
+  }
+
+  // 添加自动补全
+  if (props.enableCompletion) {
+    extensions.push(
+      autocompletion({
+        activateOnTyping: true,
+        maxRenderedOptions: 15,
+        defaultKeymap: true,
+        closeOnBlur: true,
+        selectOnOpen: false
+      })
+    )
+  }
+
+  // 添加暗色主题
   if (props.theme === 'dark') {
     extensions.push(oneDark)
   }
@@ -112,11 +134,11 @@ const createEditorState = (content: string) => {
 // 初始化编辑器
 const initEditor = async () => {
   await nextTick()
-  
+
   if (!editorContainer.value) return
 
   const state = createEditorState(props.modelValue)
-  
+
   editorView = new EditorView({
     state,
     parent: editorContainer.value
@@ -181,11 +203,22 @@ watch(() => props.modelValue, (newValue) => {
 
 watch(() => props.theme, () => {
   // 主题变化时重新创建编辑器
+  recreateEditor()
+})
+
+// 监听补全相关props变化
+watch(() => [props.tables, props.tableColumns, props.enableCompletion], () => {
+  // 补全配置变化时重新创建编辑器
+  recreateEditor()
+}, { deep: true })
+
+// 重新创建编辑器的通用方法
+const recreateEditor = () => {
   if (editorView) {
     const content = editorView.state.doc.toString()
     editorView.destroy()
     editorView = null
-    
+
     nextTick(() => {
       const state = createEditorState(content)
       editorView = new EditorView({
@@ -194,7 +227,7 @@ watch(() => props.theme, () => {
       })
     })
   }
-})
+}
 
 // 生命周期
 onMounted(() => {
@@ -241,14 +274,54 @@ onUnmounted(() => {
   background: #fff;
   max-height: 200px;
   overflow-y: auto;
+  z-index: 1000;
 }
 
 .sql-editor-wrapper :deep(.cm-completionLabel) {
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
 }
 
 .sql-editor-wrapper :deep(.cm-completionDetail) {
   font-style: italic;
   color: #909399;
+  font-size: 11px;
+}
+
+.sql-editor-wrapper :deep(.cm-completionIcon) {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+
+.sql-editor-wrapper :deep(.sql-completion-option) {
+  padding: 4px 8px;
+  border-radius: 3px;
+  transition: background-color 0.2s;
+}
+
+.sql-editor-wrapper :deep(.sql-completion-option:hover) {
+  background-color: #f5f7fa;
+}
+
+.sql-editor-wrapper :deep(.cm-completionIcon-keyword::before) {
+  content: "K";
+  color: #409eff;
+  font-weight: bold;
+  font-size: 10px;
+}
+
+.sql-editor-wrapper :deep(.cm-completionIcon-table::before) {
+  content: "T";
+  color: #67c23a;
+  font-weight: bold;
+  font-size: 10px;
+}
+
+.sql-editor-wrapper :deep(.cm-completionIcon-column::before) {
+  content: "C";
+  color: #e6a23c;
+  font-weight: bold;
+  font-size: 10px;
 }
 </style>
