@@ -206,3 +206,138 @@ export class CacheApiManager {
     }
   }
 }
+
+/**
+ * 前端缓存管理类
+ */
+export class FrontendCacheManager {
+  private static instance: FrontendCacheManager;
+  private cacheStats = {
+    hits: 0,
+    misses: 0,
+    operations: 0
+  };
+
+  static getInstance(): FrontendCacheManager {
+    if (!FrontendCacheManager.instance) {
+      FrontendCacheManager.instance = new FrontendCacheManager();
+    }
+    return FrontendCacheManager.instance;
+  }
+
+  /**
+   * 记录缓存命中
+   */
+  recordHit(): void {
+    this.cacheStats.hits++;
+    this.cacheStats.operations++;
+  }
+
+  /**
+   * 记录缓存未命中
+   */
+  recordMiss(): void {
+    this.cacheStats.misses++;
+    this.cacheStats.operations++;
+  }
+
+  /**
+   * 获取前端缓存统计
+   */
+  getStats() {
+    const hitRate = this.cacheStats.operations > 0
+      ? this.cacheStats.hits / this.cacheStats.operations
+      : 0;
+
+    return {
+      ...this.cacheStats,
+      hitRate: Math.round(hitRate * 100) / 100
+    };
+  }
+
+  /**
+   * 重置统计
+   */
+  resetStats(): void {
+    this.cacheStats = {
+      hits: 0,
+      misses: 0,
+      operations: 0
+    };
+  }
+
+  /**
+   * 清除前端缓存并通知后端
+   */
+  async clearAllCache(): Promise<void> {
+    try {
+      // 清除前端缓存
+      if (typeof window !== 'undefined') {
+        // 清除localStorage中的缓存
+        const keys = Object.keys(localStorage);
+        keys.forEach(key => {
+          if (key.startsWith('cache_') || key.startsWith('table_cache_')) {
+            localStorage.removeItem(key);
+          }
+        });
+
+        // 清除sessionStorage中的缓存
+        const sessionKeys = Object.keys(sessionStorage);
+        sessionKeys.forEach(key => {
+          if (key.startsWith('cache_') || key.startsWith('table_cache_')) {
+            sessionStorage.removeItem(key);
+          }
+        });
+      }
+
+      // 通知后端清除缓存
+      await clearAllCacheApi();
+
+      // 重置统计
+      this.resetStats();
+
+      console.log('所有缓存已清除');
+    } catch (error) {
+      console.error('清除缓存失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 清除指定连接的前端缓存
+   */
+  async clearConnectionCache(connectionId: string | number): Promise<void> {
+    try {
+      if (typeof window !== 'undefined') {
+        const prefix = `cache_${connectionId}_`;
+
+        // 清除localStorage
+        const keys = Object.keys(localStorage);
+        keys.forEach(key => {
+          if (key.startsWith(prefix)) {
+            localStorage.removeItem(key);
+          }
+        });
+
+        // 清除sessionStorage
+        const sessionKeys = Object.keys(sessionStorage);
+        sessionKeys.forEach(key => {
+          if (key.startsWith(prefix)) {
+            sessionStorage.removeItem(key);
+          }
+        });
+      }
+
+      // 通知后端清除缓存
+      await clearConnectionCacheApi(connectionId as number);
+
+      console.log(`连接 ${connectionId} 的缓存已清除`);
+    } catch (error) {
+      console.error(`清除连接 ${connectionId} 缓存失败:`, error);
+      throw error;
+    }
+  }
+}
+
+// 导出单例实例
+export const frontendCacheManager = FrontendCacheManager.getInstance();

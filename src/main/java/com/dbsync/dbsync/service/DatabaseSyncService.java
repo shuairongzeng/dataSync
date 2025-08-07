@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dbsync.dbsync.mapper.TableMapper;
 import com.dbsync.dbsync.progress.ProgressManager;
 import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
+import com.dbsync.dbsync.util.DatabaseRetryUtil;
+import com.dbsync.dbsync.config.DatabaseOptimizationConfig;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.slf4j.Logger;
@@ -11,23 +13,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
+
+import javax.sql.DataSource;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-
-import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
-import org.apache.ibatis.session.SqlSession;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.JdbcTemplate;
-
-import javax.sql.DataSource;
-import java.sql.*;
-import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.Configuration;
 import org.apache.ibatis.session.SqlSessionFactoryBuilder;
@@ -52,12 +46,13 @@ public class DatabaseSyncService {
     private final String targetDbType;
     private final String targetSchemaName;
     private final ProgressManager progressManager; // Added ProgressManager
+    private final DatabaseOptimizationConfig optimizationConfig;
 
 
     public DatabaseSyncService(SqlSessionFactory sourceFactory, SqlSessionFactory targetFactory,
                                @Value("${dbsync.truncate-before-sync:false}") boolean truncateBeforeSync, TypeMappingRegistry typeMappingRegistry,
                                @Value("${dbsync.source.db-type}") String sourceDbType, @Value("${dbsync.target.db-type}") String targetDbType, @Value("${dbsync.target.schema-name:}") String targetSchemaName,
-                               ProgressManager progressManager) { // Added ProgressManager
+                               ProgressManager progressManager, DatabaseOptimizationConfig optimizationConfig) { // Added ProgressManager and OptimizationConfig
         this.sourceFactory = sourceFactory;
         this.targetFactory = targetFactory;
         this.truncateBeforeSync = truncateBeforeSync;
@@ -66,6 +61,7 @@ public class DatabaseSyncService {
         this.targetDbType = targetDbType;
         this.targetSchemaName = targetSchemaName;
         this.progressManager = progressManager; // Store ProgressManager
+        this.optimizationConfig = optimizationConfig;
     }
 
     /**
@@ -96,15 +92,35 @@ public class DatabaseSyncService {
                 // Potentially fetch table comment here if needed for DDL
                 // ...
 
+                long tableStartTime = System.currentTimeMillis();
+                logger.info("Task [{}]: Starting synchronization of table [{}]", taskId, tableName);
+
                 try {
                     syncTable(taskId, sourceSession, targetSession, tableName, sourceSchemaName, tableComment);
                     targetSession.commit(); // Commit after each table successfully synced
+
+                    long tableEndTime = System.currentTimeMillis();
+                    long tableDuration = tableEndTime - tableStartTime;
+                    logger.info("Task [{}]: Successfully synchronized table [{}] in {}ms",
+                              taskId, tableName, tableDuration);
+
                     // progressManager.completeTableSync already logs success
                 } catch (Exception e) {
                     targetSession.rollback(); // Rollback for the current table
                     allTablesSuccess = false;
+
+                    long tableEndTime = System.currentTimeMillis();
+                    long tableDuration = tableEndTime - tableStartTime;
+                    logger.error("Task [{}]: Failed to synchronize table [{}] after {}ms. Error: {}",
+                               taskId, tableName, tableDuration, e.getMessage());
+
+                    // Log additional context for debugging
+                    if (e.getMessage() != null && e.getMessage().toLowerCase().contains("lock")) {
+                        logger.warn("Task [{}]: Table [{}] failed due to lock-related issue. " +
+                                  "Consider adjusting batch size or retry configuration.", taskId, tableName);
+                    }
+
                     // progressManager.completeTableSync (with failure) is called in syncTable's finally block
-                    logger.error("Task [{}]: Failed to synchronize table {}. Error: {}", taskId, tableName, e.getMessage());
                     // Continue with the next table
                 }
             }
@@ -158,7 +174,8 @@ public class DatabaseSyncService {
                 logger.info("Task [{}], Table [{}]: Structure created.", taskId, tableName);
             } else if (truncateBeforeSync) {
                 logger.info("Task [{}], Table [{}]: Exists in target, truncating data before sync.", taskId, tableName);
-                targetMapper.truncateTable(targetTableNameForCheck); // Assuming TRUNCATE is generally cross-DB or mapper handles it
+                // Execute TRUNCATE in a separate transaction to minimize lock time
+                executeTruncateInSeparateTransaction(taskId, targetSession, targetMapper, targetTableNameForCheck);
             }
             tableStructureCreatedOrExisted = true;
 
@@ -288,8 +305,10 @@ public class DatabaseSyncService {
             // This was moved to syncTable's startTableSync call.
             // this.progressManager.startTableSync(taskId, tableName, totalCount); // Already called in syncTable
 
-            long batchSize = 1000; // Configurable batch size
+            long batchSize = optimizationConfig.getBatchSize(); // Use configured batch size
+            long commitFrequency = optimizationConfig.getCommitFrequency(); // Use configured commit frequency
             long processedCount = 0;
+            long batchCount = 0;
             boolean tableSyncSuccess = true;
 
             Page<Map<String, Object>> page = new Page<>(1, batchSize);
@@ -322,6 +341,22 @@ public class DatabaseSyncService {
                     // executeAndReportBatchInsert already calls progressManager.updateTableProgress
                     // processedCount is now tracked by progressManager via updateTableProgress calls
                     processedCount += rowsAffectedInBatch; // Keep a local count for loop termination, or rely on progressManager's value
+                    batchCount++;
+
+                    // Enhanced monitoring for batch processing
+                    if (batchCount % commitFrequency == 0) {
+                        double progressPercentage = (double) processedCount / totalCount * 100;
+                        logger.info("Task [{}], Table [{}]: Processed {} batches, {}/{} rows ({:.1f}%)",
+                                   taskId, tableName, batchCount, processedCount, totalCount, progressPercentage);
+                    }
+
+                    // Log performance metrics for large batches
+                    if (batchCount == 1 || batchCount % 10 == 0) {
+                        long currentTime = System.currentTimeMillis();
+                        // Note: We would need to track start time to calculate actual throughput
+                        logger.debug("Task [{}], Table [{}]: Batch {} completed, batch size: {}, rows affected: {}",
+                                   taskId, tableName, batchCount, batchData.size(), rowsAffectedInBatch);
+                    }
                 } catch (Exception e) {
                     // executeAndReportBatchInsert already logs and calls completeTableSync with failure
                     // So, we just rethrow or mark this table sync as failed and break.
@@ -357,6 +392,41 @@ public class DatabaseSyncService {
             // This is now handled by syncTable's finally block.
             throw new RuntimeException("Data synchronization failed for table " + tableName, e);
         }
+    }
+
+    /**
+     * Execute TRUNCATE operation in a separate transaction to minimize lock time
+     * This prevents long-running INSERT operations from holding table locks
+     */
+    private void executeTruncateInSeparateTransaction(String taskId, SqlSession targetSession,
+                                                     TableMapper targetMapper, String tableName) throws Exception {
+        logger.debug("Task [{}], Table [{}]: Starting separate TRUNCATE transaction", taskId, tableName);
+
+        // Use retry mechanism for TRUNCATE operation
+        DatabaseRetryUtil.RetryConfig retryConfig = DatabaseRetryUtil.createLockConflictRetryConfig();
+
+        DatabaseRetryUtil.executeWithRetry(taskId, "TRUNCATE " + tableName, () -> {
+            try {
+                // Execute TRUNCATE operation
+                targetMapper.truncateTable(tableName);
+
+                // Immediately commit to release table lock
+                targetSession.commit();
+                logger.info("Task [{}], Table [{}]: TRUNCATE operation completed and committed", taskId, tableName);
+                return null;
+
+            } catch (Exception e) {
+                logger.error("Task [{}], Table [{}]: TRUNCATE operation failed, rolling back: {}",
+                            taskId, tableName, e.getMessage());
+                try {
+                    targetSession.rollback();
+                } catch (Exception rollbackError) {
+                    logger.warn("Task [{}], Table [{}]: Failed to rollback TRUNCATE transaction: {}",
+                               taskId, tableName, rollbackError.getMessage());
+                }
+                throw new RuntimeException("TRUNCATE operation failed for table " + tableName + ": " + e.getMessage(), e);
+            }
+        }, retryConfig);
     }
 
     /**
@@ -562,36 +632,41 @@ public class DatabaseSyncService {
         String sql = sqlBuilder.toString();
 
         try {
+            // Use retry mechanism for batch INSERT operations
+            DatabaseRetryUtil.RetryConfig retryConfig = DatabaseRetryUtil.createLockConflictRetryConfig();
 
-            int[][] rowsAffectedArray = jdbcTemplate.batchUpdate(sql, batchData, batchData.size(),
-                    (ps, argument) -> {
-                        for (int i = 0; i < finalColumns.size(); i++) {
-                            ps.setObject(i + 1, argument.get(finalColumns.get(i)));
+            int[][] rowsAffectedArray = DatabaseRetryUtil.executeWithRetry(taskId,
+                "BATCH INSERT " + targetTableName, () -> {
+                    return jdbcTemplate.batchUpdate(sql, batchData, batchData.size(),
+                            (ps, argument) -> {
+                                for (int i = 0; i < finalColumns.size(); i++) {
+                                    ps.setObject(i + 1, argument.get(finalColumns.get(i)));
+                                }
+                            });
+                }, retryConfig);
+
+                int totalRowsAffected = 0;
+                for (int[] batchResults : rowsAffectedArray) {
+                    for (int rows : batchResults) {
+                        if (rows > 0) {
+                            totalRowsAffected += rows;
+                        } else if (rows == Statement.SUCCESS_NO_INFO) {
+                            totalRowsAffected += 1; // Count SUCCESS_NO_INFO as one row affected for progress tracking
                         }
-                    });
-
-            int totalRowsAffected = 0;
-            for (int[] batchResults : rowsAffectedArray) {
-                for (int rows : batchResults) {
-                    if (rows > 0) {
-                        totalRowsAffected += rows;
-                    } else if (rows == Statement.SUCCESS_NO_INFO) {
-                        totalRowsAffected += 1; // Count SUCCESS_NO_INFO as one row affected for progress tracking
                     }
                 }
-            }
 
-            if (totalRowsAffected > 0) {
-                this.progressManager.updateTableProgress(taskId, progressIdentifier, totalRowsAffected);
-            } else if (batchData.size() > 0 && totalRowsAffected == 0 &&
-                    rowsAffectedArray.length > 0 && rowsAffectedArray[0][0] == Statement.SUCCESS_NO_INFO) {
-                this.progressManager.updateTableProgress(taskId, progressIdentifier, batchData.size());
-                totalRowsAffected = batchData.size();
-            }
+                if (totalRowsAffected > 0) {
+                    this.progressManager.updateTableProgress(taskId, progressIdentifier, totalRowsAffected);
+                } else if (batchData.size() > 0 && totalRowsAffected == 0 &&
+                        rowsAffectedArray.length > 0 && rowsAffectedArray[0][0] == Statement.SUCCESS_NO_INFO) {
+                    this.progressManager.updateTableProgress(taskId, progressIdentifier, batchData.size());
+                    totalRowsAffected = batchData.size();
+                }
 
-            logger.debug("Task [{}], ProgressID [{}], Table [{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected: {}",
-                    taskId, progressIdentifier, targetTableName, sql, batchData.size(), totalRowsAffected);
-            return totalRowsAffected;
+                logger.debug("Task [{}], ProgressID [{}], Table [{}]: Batch insert executed. SQL: [{}], Batch size: {}, Rows affected: {}",
+                        taskId, progressIdentifier, targetTableName, sql, batchData.size(), totalRowsAffected);
+                return totalRowsAffected;
 
         } catch (Exception e) {
             // Enhanced error handling for PostgreSQL cluster issues

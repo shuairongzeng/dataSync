@@ -8,6 +8,7 @@ import com.dbsync.dbsync.dto.TablePageRequest;
 import com.dbsync.dbsync.dto.TablePageResponse;
 import com.dbsync.dbsync.model.DbConnection;
 import com.dbsync.dbsync.service.DbConnectionService;
+import com.dbsync.dbsync.service.DatabaseMetadataCacheService;
 import com.dbsync.dbsync.service.QueryHistoryService;
 import com.dbsync.dbsync.service.QueryService;
 import org.slf4j.Logger;
@@ -34,6 +35,9 @@ public class DbConnectionController {
 
     @Autowired
     private DbConnectionService dbConnectionService;
+
+    @Autowired
+    private DatabaseMetadataCacheService cacheService;
 
     @Autowired
     private QueryService queryService;
@@ -184,7 +188,7 @@ public class DbConnectionController {
             request.setSortOrder(sortOrder);
             request.setSchema(schema);
 
-            TablePageResponse<TableInfo> response = dbConnectionService.getTablesWithPagination(id, request);
+            TablePageResponse<TableInfo> response = cacheService.getTablesWithPagination(id, request);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("获取表列表失败", e);
@@ -201,7 +205,7 @@ public class DbConnectionController {
     @GetMapping("/connections/{id}/tables")
     public Object getTables(@PathVariable Long id, @RequestParam(required = false) String schema) {
         try {
-            List<String> tables = dbConnectionService.getTables(id, schema);
+            List<String> tables = cacheService.getTables(id, schema);
             return tables;
         } catch (RuntimeException e) {
             Map<String, String> error = new HashMap<>();
@@ -299,7 +303,7 @@ public class DbConnectionController {
                                            @PathVariable String tableName,
                                            @RequestParam(required = false) String schema) {
         try {
-            List<ColumnInfo> columns = dbConnectionService.getTableColumns(id, tableName, schema);
+            List<ColumnInfo> columns = cacheService.getTableColumns(id, tableName, schema);
             return ResponseEntity.ok(columns);
         } catch (Exception e) {
             logger.error("获取表结构失败: {}", e.getMessage(), e);
@@ -315,7 +319,7 @@ public class DbConnectionController {
     @GetMapping("/connections/{id}/schemas")
     public ResponseEntity<?> getSchemas(@PathVariable Long id) {
         try {
-            List<String> schemas = dbConnectionService.getSchemas(id);
+            List<String> schemas = cacheService.getSchemas(id);
             return ResponseEntity.ok(schemas);
         } catch (Exception e) {
             logger.error("获取Schema列表失败: {}", e.getMessage(), e);

@@ -246,6 +246,8 @@ import {
   getDbTablesApi,
   checkConnectionHealthApi
 } from "@/api/database";
+import { dbMetadataCache, CacheKeys } from '@/utils/cache';
+import { frontendCacheManager } from '@/api/cache';
 
 defineOptions({
   name: "DatabaseSync"
@@ -342,9 +344,8 @@ const fetchConnections = async () => {
   }
 };
 
-// 表列表缓存
-const tableListCache = new Map<string, { tables: any[], timestamp: number }>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+// 表列表缓存配置
+const CACHE_DURATION = 10 * 60 * 1000; // 10分钟缓存
 
 // 加载源表列表（支持缓存和重试）
 const loadSourceTables = async (retryCount = 0) => {
@@ -353,13 +354,14 @@ const loadSourceTables = async (retryCount = 0) => {
     return;
   }
 
-  const cacheKey = `${formData.sourceConnectionId}_${formData.sourceSchemaName || 'default'}`;
-  const cached = tableListCache.get(cacheKey);
+  const cacheKey = CacheKeys.tables(formData.sourceConnectionId, formData.sourceSchemaName);
 
   // 检查缓存是否有效
-  if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-    sourceTableList.value = cached.tables;
+  const cached = dbMetadataCache.get(cacheKey);
+  if (cached) {
+    sourceTableList.value = cached;
     ElMessage.success("表列表加载成功（来自缓存）");
+    frontendCacheManager.recordHit();
     return;
   }
 
@@ -384,10 +386,8 @@ const loadSourceTables = async (retryCount = 0) => {
     sourceTableList.value = tableOptions;
 
     // 更新缓存
-    tableListCache.set(cacheKey, {
-      tables: tableOptions,
-      timestamp: Date.now()
-    });
+    dbMetadataCache.set(cacheKey, tableOptions, CACHE_DURATION);
+    frontendCacheManager.recordMiss();
 
     ElMessage.success(`表列表加载成功（共${tables.length}个表）`);
   } catch (error: any) {
@@ -414,8 +414,10 @@ const handleSourceChange = () => {
   sourceTableList.value = [];
 
   // 清除相关缓存
-  const oldCacheKey = `${formData.sourceConnectionId}_${formData.sourceSchemaName || 'default'}`;
-  tableListCache.delete(oldCacheKey);
+  if (formData.sourceConnectionId) {
+    const cacheKey = CacheKeys.tables(formData.sourceConnectionId, formData.sourceSchemaName);
+    dbMetadataCache.delete(cacheKey);
+  }
 };
 
 // 新增任务

@@ -21,6 +21,9 @@ public class QueryService {
     
     @Autowired
     private DbConnectionService dbConnectionService;
+
+    @Autowired
+    private DatabaseMetadataCacheService cacheService;
     
     /**
      * 执行SQL查询
@@ -197,7 +200,7 @@ public class QueryService {
                 throw new RuntimeException("数据库连接不存在: " + connectionId);
             }
             
-            return dbConnectionService.getTables(connectionId, schema);
+            return cacheService.getTables(connectionId, schema);
             
         } catch (Exception e) {
             logger.error("获取表列表失败: {}", e.getMessage(), e);

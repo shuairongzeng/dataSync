@@ -3,6 +3,7 @@ package com.dbsync.dbsync.service;
 import com.dbsync.dbsync.model.DbConnection;
 import com.dbsync.dbsync.progress.ProgressManager;
 import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
+import com.dbsync.dbsync.config.DatabaseOptimizationConfig;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,9 @@ public class DatabaseSyncServiceFactory {
 
     @Autowired
     private ProgressManager progressManager;
+
+    @Autowired
+    private DatabaseOptimizationConfig optimizationConfig;
 
     /**
      * 创建DatabaseSyncService实例
@@ -45,7 +49,8 @@ public class DatabaseSyncServiceFactory {
             sourceDbType,
             targetDbType,
             targetSchemaName,
-            progressManager
+            progressManager,
+            optimizationConfig
         );
     }
 

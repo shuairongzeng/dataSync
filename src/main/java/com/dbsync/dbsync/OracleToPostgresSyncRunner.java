@@ -1,6 +1,7 @@
 package com.dbsync.dbsync;
 
 import com.dbsync.dbsync.config.DatabaseConfig;
+import com.dbsync.dbsync.config.DatabaseOptimizationConfig;
 import com.dbsync.dbsync.progress.ProgressManager;
 import com.dbsync.dbsync.service.DatabaseSyncService;
 import com.dbsync.dbsync.typemapping.TypeMappingRegistry;
@@ -35,7 +36,8 @@ public class OracleToPostgresSyncRunner {
             @Qualifier("oracleSqlSessionFactory") SqlSessionFactory sourceFactory,
             @Qualifier("postgresSqlSessionFactory") SqlSessionFactory targetFactory,
             TypeMappingRegistry typeMappingRegistry,
-            ProgressManager progressManager) {
+            ProgressManager progressManager,
+            DatabaseOptimizationConfig optimizationConfig) {
         return args -> {
             try {
                 // 配置源数据库和目标数据库
@@ -54,7 +56,8 @@ public class OracleToPostgresSyncRunner {
                         sourceDbType,
                         targetDbType,
                         targetSchemaName,
-                        progressManager
+                        progressManager,
+                        optimizationConfig
                 );
 
                 // 要同步的表列表
