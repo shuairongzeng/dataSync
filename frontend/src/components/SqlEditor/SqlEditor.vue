@@ -10,6 +10,7 @@ import { sql } from '@codemirror/lang-sql'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { autocompletion } from '@codemirror/autocomplete'
 import { defaultKeymap, history } from '@codemirror/commands'
+import { createSqlCompletion, SqlCompletionProvider } from './SqlCompletion'
 
 // Props定义
 interface Props {
@@ -49,6 +50,7 @@ const emit = defineEmits<Emits>()
 // 响应式数据
 const editorContainer = ref<HTMLElement>()
 let editorView: EditorView | null = null
+let completionProvider: SqlCompletionProvider | null = null
 
 // 创建编辑器状态
 const createEditorState = (content: string) => {
@@ -109,13 +111,21 @@ const createEditorState = (content: string) => {
 
   // 添加自动补全
   if (props.enableCompletion) {
+    // 创建SQL补全提供器
+    const sqlCompletion = createSqlCompletion(props.tables, props.tableColumns)
+    completionProvider = sqlCompletion.provider
+    
+    console.log('Creating SQL completion with tables:', props.tables)
+    
     extensions.push(
       autocompletion({
+        override: [sqlCompletion.extension],
         activateOnTyping: true,
         maxRenderedOptions: 15,
         defaultKeymap: true,
         closeOnBlur: true,
-        selectOnOpen: false
+        selectOnOpen: false,
+        icons: false
       })
     )
   }
@@ -208,6 +218,11 @@ watch(() => props.theme, () => {
 
 // 监听补全相关props变化
 watch(() => [props.tables, props.tableColumns, props.enableCompletion], () => {
+  console.log('Tables/columns changed:', props.tables, props.tableColumns)
+  // 更新补全提供器数据
+  if (completionProvider) {
+    completionProvider.updateData(props.tables, props.tableColumns)
+  }
   // 补全配置变化时重新创建编辑器
   recreateEditor()
 }, { deep: true })

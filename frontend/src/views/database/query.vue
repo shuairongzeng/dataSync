@@ -110,7 +110,7 @@
               v-model="sqlText"
               :height="'300px'"
               :tables="availableTables"
-              :table-columns="tableColumnsMap"
+              :tableColumns="tableColumnsMap"
               :enable-completion="true"
               placeholder="请输入SQL查询语句..."
               @change="handleSqlChange"
@@ -443,15 +443,16 @@ const executeQuery = async () => {
     )
 
     // Check if result came from cache (this would need to be added to backend response)
-    lastQueryFromCache.value = result.fromCache || false
+    lastQueryFromCache.value = (result as any)?.fromCache || false
 
     // 转换后端返回的数据结构为前端表格需要的格式
-    if (result && result.columns && result.rows) {
+    if (result && (result as any).columns && (result as any).rows) {
+      const resultData = result as any
       const transformedResult = {
-        ...result,
-        data: result.rows.map((row: any[]) => {
+        ...resultData,
+        data: resultData.rows.map((row: any[]) => {
           const rowObj: any = {}
-          result.columns.forEach((column: string, index: number) => {
+          resultData.columns.forEach((column: string, index: number) => {
             rowObj[column] = row[index]
           })
           return rowObj
