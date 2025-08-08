@@ -4,11 +4,13 @@ import com.dbsync.dbsync.config.DatabaseConfig;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
 
 @SpringBootApplication
-@MapperScan("com.dbsync.dbsync.mapper")
+@MapperScan({"com.dbsync.dbsync.mapper"})
 @Import(DatabaseConfig.class)
+@ComponentScan(basePackages = {"com.dbsync.dbsync", "com.dbsync.cache"})
 public class DbsyncApplication {
 
     public static void main(String[] args) {

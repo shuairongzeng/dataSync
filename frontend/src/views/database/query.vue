@@ -46,6 +46,29 @@
           <el-icon><Clock /></el-icon>
           历史记录
         </el-button>
+        
+        <!-- Cache Controls -->
+        <div class="cache-controls">
+          <el-checkbox v-model="useCaching" @change="onCacheSettingChange">
+            启用缓存
+          </el-checkbox>
+          <el-button 
+            @click="clearConnectionCache" 
+            :disabled="!selectedConnectionId"
+            size="small"
+            type="warning"
+          >
+            清空缓存
+          </el-button>
+          <el-button 
+            @click="warmupCache" 
+            :disabled="!selectedConnectionId"
+            size="small"
+            type="info"
+          >
+            预热缓存
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -53,9 +76,9 @@
     <div class="main-content">
       <!-- 左侧面板 -->
       <div class="left-panel">
-        <!-- 虚拟滚动表格 -->
+        <!-- 缓存表格列表 -->
         <div class="table-list-container">
-          <VirtualTableList
+          <CachedTableList
             v-if="selectedConnectionId"
             :connection-id="selectedConnectionId"
             :schema="selectedSchema"
@@ -102,6 +125,12 @@
             <div class="result-info" v-if="queryResult">
               <span>执行时间：{{ queryResult.executionTime }}ms</span>
               <span>返回行数：{{ queryResult.totalRows }}</span>
+              <span v-if="lastQueryFromCache" class="cache-indicator">
+                📦 来自缓存
+              </span>
+              <span v-else class="cache-indicator">
+                🔄 实时查询
+              </span>
             </div>
           </div>
 
@@ -207,7 +236,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Delete, Clock, Search } from '@element-plus/icons-vue'
-import VirtualTableList from '@/components/VirtualTableList.vue'
+import CachedTableList from '@/components/CachedTableList.vue'
 import SqlEditor from '@/components/SqlEditor/SqlEditor.vue'
 import {
   getConnectionsApi,
@@ -217,6 +246,7 @@ import {
   getTablesApi,
   getTableColumnsApi
 } from '@/api/database'
+import { http } from '@/utils/http'
 
 // 响应式数据
 const connections = ref<any[]>([])
@@ -230,6 +260,10 @@ const showHistory = ref(false)
 const historySearch = ref('')
 const queryHistory = ref<any[]>([])
 
+// Cache-related data
+const useCaching = ref(true)
+const lastQueryFromCache = ref(false)
+
 // 智能补全相关数据
 const availableTables = ref<string[]>([])
 const tableColumnsMap = ref<Map<string, string[]>>(new Map())
@@ -241,6 +275,67 @@ const filteredHistory = computed(() => {
     item.sql.toLowerCase().includes(historySearch.value.toLowerCase())
   )
 })
+
+// Enhanced Query Service Methods
+const executeEnhancedQuery = async (connectionId: string, sql: string, schema?: string, options = {}) => {
+  const response = await http.request('post', '/api/enhanced-query/execute', {
+    data: {
+      connectionId: parseInt(connectionId),
+      sql,
+      schema,
+      useCache: useCaching.value,
+      saveHistory: true,
+      ...options
+    }
+  })
+  return response
+}
+
+const loadTablesWithCache = async (connectionId: string, schema?: string) => {
+  const params = new URLSearchParams()
+  if (schema) params.append('schema', schema)
+  params.append('useCache', 'true')
+  
+  const response = await http.request('get', `/api/enhanced-query/tables/${connectionId}?${params.toString()}`)
+  return response
+}
+
+const loadTableColumnsWithCache = async (connectionId: string, tableName: string, schema?: string) => {
+  const params = new URLSearchParams()
+  if (schema) params.append('schema', schema)
+  params.append('useCache', 'true')
+  
+  const response = await http.request('get', `/api/enhanced-query/tables/${connectionId}/${tableName}/columns?${params.toString()}`)
+  return response
+}
+
+// Cache Management Methods
+const clearConnectionCache = async () => {
+  try {
+    await http.request('delete', `/api/enhanced-query/cache/${selectedConnectionId.value}`)
+    ElMessage.success('缓存清空成功')
+    
+    // Refresh table list after cache clear
+    await loadTablesForCompletion()
+  } catch (error: any) {
+    ElMessage.error('清空缓存失败：' + (error.message || '未知错误'))
+  }
+}
+
+const warmupCache = async () => {
+  try {
+    const params = selectedSchema.value ? `?schema=${selectedSchema.value}` : ''
+    await http.request('post', `/api/enhanced-query/cache/warmup/${selectedConnectionId.value}${params}`)
+    ElMessage.success('缓存预热完成')
+  } catch (error: any) {
+    ElMessage.error('缓存预热失败：' + (error.message || '未知错误'))
+  }
+}
+
+const onCacheSettingChange = () => {
+  // Save cache preference to localStorage
+  localStorage.setItem('dbsync-cache-enabled', useCaching.value.toString())
+}
 
 // 方法
 const loadConnections = async () => {
@@ -258,6 +353,7 @@ const handleConnectionChange = async () => {
     schemas.value = await getSchemasApi(selectedConnectionId.value)
     selectedSchema.value = ''
     queryResult.value = null
+    lastQueryFromCache.value = false
 
     // 清空补全数据
     availableTables.value = []
@@ -269,6 +365,7 @@ const handleConnectionChange = async () => {
 
 const handleSchemaChange = async () => {
   queryResult.value = null
+  lastQueryFromCache.value = false
   // 加载表名和字段数据用于智能补全
   await loadTablesForCompletion()
 }
@@ -282,14 +379,14 @@ const handleSqlGenerated = (sql: string) => {
   sqlText.value = sql
 }
 
-// 加载表名和字段数据用于智能补全
+// 加载表名和字段数据用于智能补全 (Enhanced with caching)
 const loadTablesForCompletion = async () => {
   if (!selectedConnectionId.value) return
 
   try {
-    // 获取表列表
-    const tables = await getTablesApi(selectedConnectionId.value, selectedSchema.value)
-    availableTables.value = tables.map((table: any) => table.name || table.tableName || table)
+    // Use enhanced API with caching
+    const tables = await loadTablesWithCache(selectedConnectionId.value, selectedSchema.value)
+    availableTables.value = Array.isArray(tables) ? tables.map((table: any) => table.name || table.tableName || table) : []
 
     // 清空之前的字段映射
     tableColumnsMap.value.clear()
@@ -298,8 +395,8 @@ const loadTablesForCompletion = async () => {
     const tablesToLoad = availableTables.value.slice(0, 10)
     for (const tableName of tablesToLoad) {
       try {
-        const columns = await getTableColumnsApi(selectedConnectionId.value, tableName, selectedSchema.value)
-        const columnNames = columns.map((col: any) => col.name || col.columnName || col)
+        const columns = await loadTableColumnsWithCache(selectedConnectionId.value, tableName, selectedSchema.value)
+        const columnNames = Array.isArray(columns) ? columns.map((col: any) => col.name || col.columnName || col) : []
         tableColumnsMap.value.set(tableName.toLowerCase(), columnNames)
       } catch (error) {
         console.warn(`Failed to load columns for table ${tableName}:`, error)
@@ -307,6 +404,13 @@ const loadTablesForCompletion = async () => {
     }
   } catch (error: any) {
     console.error('Failed to load tables for completion:', error)
+    // Fallback to original API if enhanced API fails
+    try {
+      const tables = await getTablesApi(selectedConnectionId.value, selectedSchema.value)
+      availableTables.value = tables.map((table: any) => table.name || table.tableName || table)
+    } catch (fallbackError) {
+      console.error('Fallback table loading also failed:', fallbackError)
+    }
   }
 }
 
@@ -328,12 +432,18 @@ const executeQuery = async () => {
   }
 
   executing.value = true
+  lastQueryFromCache.value = false
 
   try {
-    const result = await executeQueryApi(selectedConnectionId.value, {
-      sql: sqlText.value,
-      schema: selectedSchema.value
-    })
+    // Use enhanced query API with caching
+    const result = await executeEnhancedQuery(
+      selectedConnectionId.value,
+      sqlText.value,
+      selectedSchema.value
+    )
+
+    // Check if result came from cache (this would need to be added to backend response)
+    lastQueryFromCache.value = result.fromCache || false
 
     // 转换后端返回的数据结构为前端表格需要的格式
     if (result && result.columns && result.rows) {
@@ -359,6 +469,32 @@ const executeQuery = async () => {
   } catch (error: any) {
     ElMessage.error('查询执行失败：' + (error.message || '未知错误'))
     queryResult.value = null
+    
+    // Fallback to original API if enhanced API fails
+    try {
+      const fallbackResult = await executeQueryApi(selectedConnectionId.value, {
+        sql: sqlText.value,
+        schema: selectedSchema.value
+      })
+      
+      if (fallbackResult && fallbackResult.columns && fallbackResult.rows) {
+        const transformedResult = {
+          ...fallbackResult,
+          data: fallbackResult.rows.map((row: any[]) => {
+            const rowObj: any = {}
+            fallbackResult.columns.forEach((column: string, index: number) => {
+              rowObj[column] = row[index]
+            })
+            return rowObj
+          })
+        }
+        queryResult.value = transformedResult
+        ElMessage.success('查询执行成功（使用备用接口）')
+        loadQueryHistory()
+      }
+    } catch (fallbackError) {
+      console.error('Fallback query execution also failed:', fallbackError)
+    }
   } finally {
     executing.value = false
   }
@@ -367,6 +503,7 @@ const executeQuery = async () => {
 const clearQuery = () => {
   sqlText.value = ''
   queryResult.value = null
+  lastQueryFromCache.value = false
 }
 
 const formatSql = () => {
@@ -421,6 +558,12 @@ const formatTime = (timeStr: string) => {
 // 生命周期
 onMounted(() => {
   loadConnections()
+  
+  // Load cache preference from localStorage
+  const savedCachePreference = localStorage.getItem('dbsync-cache-enabled')
+  if (savedCachePreference !== null) {
+    useCaching.value = savedCachePreference === 'true'
+  }
 })
 </script>
 
@@ -453,6 +596,21 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.cache-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+  padding-left: 16px;
+  border-left: 1px solid #e4e7ed;
+}
+
+.cache-indicator {
+  font-size: 12px;
+  color: #409eff;
+  font-weight: 500;
 }
 
 .main-content {
@@ -516,18 +674,6 @@ onMounted(() => {
   padding: 16px;
 }
 
-.sql-textarea {
-  height: 100%;
-}
-
-.sql-textarea :deep(.el-textarea__inner) {
-  height: 100% !important;
-  resize: none;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
 .result-container {
   height: 350px;
   display: flex;
@@ -556,6 +702,7 @@ onMounted(() => {
   gap: 16px;
   font-size: 12px;
   color: #909399;
+  align-items: center;
 }
 
 .result-content {
@@ -661,5 +808,3 @@ onMounted(() => {
   color: #f56c6c;
 }
 </style>
-
-

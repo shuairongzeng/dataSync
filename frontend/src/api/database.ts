@@ -1,4 +1,10 @@
 import { http } from "@/utils/http";
+import { 
+  executeEnhancedQueryApi, 
+  getCachedTablesApi, 
+  getCachedTableColumnsApi,
+  type EnhancedQueryRequest 
+} from "./enhanced-query";
 
 // 数据库配置类型
 export interface DbConfig {
