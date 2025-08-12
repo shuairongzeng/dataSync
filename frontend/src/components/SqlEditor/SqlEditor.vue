@@ -12,7 +12,7 @@ import { autocompletion } from '@codemirror/autocomplete'
 import { defaultKeymap, history } from '@codemirror/commands'
 import { createSqlCompletion, SqlCompletionProvider } from './SqlCompletion'
 
-// Props定义
+// Props 定义
 interface Props {
   modelValue?: string
   placeholder?: string
@@ -27,7 +27,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   modelValue: '',
-  placeholder: '请输入SQL查询语句...',
+  placeholder: '请输入 SQL 查询语句...',
   readonly: false,
   theme: 'light',
   height: '300px',
@@ -37,7 +37,7 @@ const props = withDefaults(defineProps<Props>(), {
   enableCompletion: true
 })
 
-// Emits定义
+// Emits 定义
 interface Emits {
   (e: 'update:modelValue', value: string): void
   (e: 'change', value: string): void
@@ -111,11 +111,11 @@ const createEditorState = (content: string) => {
 
   // 添加自动补全
   if (props.enableCompletion) {
-    // 创建SQL补全提供器
+    // 创建 SQL 补全提供器
     const sqlCompletion = createSqlCompletion(props.tables, props.tableColumns)
     completionProvider = sqlCompletion.provider
     
-    console.log('Creating SQL completion with tables:', props.tables)
+    // console.log('Creating SQL completion with tables:', props.tables)
     
     extensions.push(
       autocompletion({
@@ -206,7 +206,7 @@ defineExpose({
   editorView: () => editorView
 })
 
-// 监听props变化
+// 监听 props 变化
 watch(() => props.modelValue, (newValue) => {
   updateContent(newValue || '')
 })
@@ -216,9 +216,9 @@ watch(() => props.theme, () => {
   recreateEditor()
 })
 
-// 监听补全相关props变化
+// 监听补全相关 props 变化
 watch(() => [props.tables, props.tableColumns, props.enableCompletion], () => {
-  console.log('Tables/columns changed:', props.tables, props.tableColumns)
+  // console.log('Tables/columns changed:', props.tables, props.tableColumns)
   // 更新补全提供器数据
   if (completionProvider) {
     completionProvider.updateData(props.tables, props.tableColumns)

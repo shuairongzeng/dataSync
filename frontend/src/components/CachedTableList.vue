@@ -54,15 +54,15 @@
       <el-auto-resizer>
         <template #default="{ height, width }">
           <el-table-v2
+            :key="tableKey"
             :columns="columns"
             :data="displayData"
             :width="width"
             :height="height"
-            :row-height="56"
+            :row-height="68"
             :header-height="48"
-            :estimated-row-height="56"
-            @row-click="handleRowClick"
-            @row-contextmenu="handleRowRightClick"
+            :estimated-row-height="68"
+            :row-class="getRowClass"
             class="virtual-table"
           >
             <template #empty>
@@ -94,32 +94,174 @@
     </div>
 
     <!-- 右键菜单 -->
-    <el-dropdown
-      ref="contextMenuRef"
-      trigger="contextmenu"
-      :teleported="false"
-      @command="handleContextMenuCommand"
+    <div v-if="showContextMenu" class="context-menu-overlay" @click="hideContextMenu">
+      <div class="context-menu" :style="contextMenuStyle" @click.stop>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('select')">
+          <el-icon><Search /></el-icon>
+          SELECT 查询
+        </div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('count')">
+          <el-icon><Document /></el-icon>
+          COUNT 查询
+        </div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('describe')">
+          <el-icon><View /></el-icon>
+          表结构
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('insert')">
+          <el-icon><Document /></el-icon>
+          INSERT 模板
+        </div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('update')">
+          <el-icon><Document /></el-icon>
+          UPDATE 模板
+        </div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('delete')">
+          <el-icon><Document /></el-icon>
+          DELETE 模板
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" @click.stop="handleContextMenuCommand('viewFields')">
+          <el-icon><View /></el-icon>
+          查看字段
+        </div>
+      </div>
+    </div>
+
+    <!-- SQL 菜单 -->
+    <div v-if="showSqlMenu" class="sql-menu-overlay" @click="hideSqlMenu">
+      <div class="sql-menu" :style="sqlMenuStyle" @click.stop>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('select')">
+          <el-icon><Search /></el-icon>
+          SELECT 查询
+        </div>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('count')">
+          <el-icon><Document /></el-icon>
+          COUNT 查询
+        </div>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('describe')">
+          <el-icon><View /></el-icon>
+          表结构
+        </div>
+        <div class="sql-menu-divider"></div>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('insert')">
+          <el-icon><Document /></el-icon>
+          INSERT 模板
+        </div>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('update')">
+          <el-icon><Document /></el-icon>
+          UPDATE 模板
+        </div>
+        <div class="sql-menu-item" @click="handleSqlMenuCommand('delete')">
+          <el-icon><Document /></el-icon>
+          DELETE 模板
+        </div>
+      </div>
+    </div>
+
+    <!-- 字段列表弹框 -->
+    <el-dialog
+      v-model="showFieldDialog"
+      :title="dialogTitle"
+      width="900px"
+      :close-on-click-modal="false"
+      class="field-dialog"
     >
-      <span></span>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item command="select">生成 SELECT 查询</el-dropdown-item>
-          <el-dropdown-item command="count">生成 COUNT 查询</el-dropdown-item>
-          <el-dropdown-item command="describe">查看表结构</el-dropdown-item>
-          <el-dropdown-item command="insert">生成 INSERT 模板</el-dropdown-item>
-          <el-dropdown-item command="update">生成 UPDATE 模板</el-dropdown-item>
-          <el-dropdown-item command="delete">生成 DELETE 模板</el-dropdown-item>
-          <el-dropdown-item divided command="refresh-single">刷新此表信息</el-dropdown-item>
-        </el-dropdown-menu>
+      <div class="field-dialog-header">
+        <el-input
+          v-model="fieldSearchText"
+          placeholder="搜索字段名..."
+          :prefix-icon="Search"
+          clearable
+          class="field-search"
+        />
+        <div class="field-stats">
+          <el-tag type="info" size="small">
+            共 {{ filteredFields.length }} 个字段
+          </el-tag>
+        </div>
+      </div>
+      
+      <div class="field-dialog-content">
+        <el-table
+          :data="filteredFields"
+          v-loading="fieldDialogLoading"
+          stripe
+          border
+          height="450"
+          class="field-table"
+        >
+          <el-table-column prop="columnName" label="字段名" width="160">
+            <template #default="{ row }">
+              <div class="field-name-cell">
+                <el-icon v-if="row.isPrimaryKey" class="pk-icon"><Key /></el-icon>
+                <span class="field-name" :class="{ 'is-primary': row.isPrimaryKey }">
+                  {{ row.columnName }}
+                </span>
+                <el-button
+                  size="small"
+                  text
+                  :icon="CopyDocument"
+                  @click="copyFieldName(row.columnName)"
+                  class="copy-btn"
+                />
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="dataType" label="类型" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" class="type-tag">{{ row.dataType }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="columnSize" label="长度" width="80" align="center" />
+          <el-table-column prop="nullable" label="可空" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.nullable ? 'success' : 'danger'" size="small">
+                {{ row.nullable ? '是' : '否' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="isPrimaryKey" label="主键" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.isPrimaryKey" type="warning" size="small">
+                <el-icon><Key /></el-icon>
+                主键
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="isAutoIncrement" label="自增" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.isAutoIncrement" type="info" size="small">自增</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="remarks" label="备注" min-width="150">
+            <template #default="{ row }">
+              <span class="field-remarks">{{ row.remarks || '-' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="copyAllFields" :icon="CopyDocument">
+            复制所有字段名
+          </el-button>
+          <el-button @click="showFieldDialog = false" type="primary">
+            关闭
+          </el-button>
+        </div>
       </template>
-    </el-dropdown>
+    </el-dialog>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch, h } from 'vue'
-import { ElMessage, ElIcon, ElTag, ElText, ElTooltip } from 'element-plus'
-import { Search, Refresh, Clock, Document } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
+import { ElMessage, ElIcon, ElTag, ElText, ElTooltip, ElButton } from 'element-plus'
+import { Search, Refresh, Clock, Document, View, Close, Key, CopyDocument } from '@element-plus/icons-vue'
 import { tableCacheManager, type TableInfo, type CacheMetadata } from '@/utils/TableCacheManager'
 import { getTablesWithPaginationApi, getTableColumnsApi } from '@/api/database'
 
@@ -145,12 +287,44 @@ const loading = ref(false)
 const refreshing = ref(false)
 const tableData = ref<TableInfo[]>([])
 const filteredData = ref<TableInfo[]>([])
-const selectedTable = ref<TableInfo | null>(null)
 const cacheMetadata = ref<CacheMetadata | null>(null)
+const tableKey = ref(0) // 用于强制重新渲染表格
+
+// SQL 菜单相关状态
+const showSqlMenu = ref(false)
+const sqlMenuStyle = ref({})
+const sqlMenuTable = ref<TableInfo | null>(null)
+
+// 右键菜单相关状态
+const showContextMenu = ref(false)
+const contextMenuStyle = ref({})
+const contextMenuTable = ref<TableInfo | null>(null)
+
+// 字段弹框相关状态
+const showFieldDialog = ref(false)
+const fieldDialogLoading = ref(false)
+const tableFields = ref<any[]>([])
+const dialogTitle = ref('')
+const fieldSearchText = ref('')
+
+// 搜索防抖
+const searchTimeout = ref<any>(null)
 
 // 容器引用
 const containerRef = ref()
-const contextMenuRef = ref()
+
+// 计算属性：过滤后的字段列表
+const filteredFields = computed(() => {
+  if (!fieldSearchText.value.trim()) {
+    return tableFields.value
+  }
+  
+  const searchLower = fieldSearchText.value.toLowerCase()
+  return tableFields.value.filter(field => 
+    field.columnName.toLowerCase().includes(searchLower) ||
+    (field.remarks && field.remarks.toLowerCase().includes(searchLower))
+  )
+})
 
 // 计算属性
 const displayData = computed(() => filteredData.value)
@@ -161,7 +335,7 @@ const hasCache = computed(() => {
 
 const cacheStatus = computed(() => {
   if (!hasCache.value) {
-    return { type: 'info', text: '无缓存' }
+    return { type: 'info' as const, text: '无缓存' }
   }
   
   if (cacheMetadata.value) {
@@ -169,39 +343,44 @@ const cacheStatus = computed(() => {
     const hours = Math.floor(age / (1000 * 60 * 60))
     
     if (hours < 1) {
-      return { type: 'success', text: '最新' }
+      return { type: 'success' as const, text: '最新' }
     } else if (hours < 12) {
-      return { type: 'warning', text: `${hours}小时前` }
+      return { type: 'warning' as const, text: `${hours}小时前` }
     } else {
-      return { type: 'danger', text: '较旧' }
+      return { type: 'danger' as const, text: '较旧' }
     }
   }
   
-  return { type: 'info', text: '已缓存' }
+  return { type: 'info' as const, text: '已缓存' }
 })
 
-// 表格列定义 - 简化为只显示表名和备注，其他信息通过tooltip显示
-const columns = [
+// 表格列定义 - 简化为普通展示模式
+const columns = computed(() => [
   {
     key: 'tableName',
     title: '表名',
     dataKey: 'tableName',
     width: 350,
     cellRenderer: ({ rowData }: any) => {
+      // 统一的表名显示，带详细 tooltip
       const tooltipContent = h('div', { class: 'tooltip-content' }, [
         h('div', { class: 'tooltip-item' }, [
           h('span', { class: 'tooltip-label' }, '类型：'),
-          h('span', { class: 'tooltip-value' }, rowData.tableType === 'VIEW' ? '视图' : '表')
+          h('span', { class: 'tooltip-value' }, rowData.tableType === 'VIEW' ? '视图' : '数据表')
         ]),
         h('div', { class: 'tooltip-item' }, [
-          h('span', { class: 'tooltip-label' }, '列数：'),
-          h('span', { class: 'tooltip-value' }, `${rowData.columnCount || 0} 列`)
+          h('span', { class: 'tooltip-label' }, '字段数：'),
+          h('span', { class: 'tooltip-value' }, `${rowData.columnCount || 0} 个`)
         ]),
         h('div', { class: 'tooltip-item' }, [
           h('span', { class: 'tooltip-label' }, '主键：'),
           h('span', { class: 'tooltip-value' }, rowData.hasPrimaryKey ? '有' : '无')
-        ])
-      ])
+        ]),
+        rowData.remarks ? h('div', { class: 'tooltip-item' }, [
+          h('span', { class: 'tooltip-label' }, '备注：'),
+          h('span', { class: 'tooltip-value' }, rowData.remarks)
+        ]) : null
+      ].filter(Boolean))
       
       return h(ElTooltip, {
         placement: 'right',
@@ -210,16 +389,32 @@ const columns = [
         popperClass: 'table-info-tooltip'
       }, {
         content: () => tooltipContent,
-        default: () => h('div', { class: 'table-name-cell' }, [
-          h(ElIcon, { class: 'table-icon' }, () => h(Document)),
+        default: () => h('div', { 
+          class: 'table-row-cell full-width-cell',
+          'data-table-name': rowData.tableName,
+          style: { width: '100%', minHeight: '68px' },
+          onContextmenu: (e: MouseEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            handleRowContextMenu(e, rowData)
+          }
+        }, [
           h('div', { class: 'table-name-content' }, [
             h('span', { class: 'table-name' }, rowData.tableName),
-            rowData.tableType === 'VIEW' ? h(ElTag, { 
-              size: 'small', 
-              type: 'info',
-              class: 'table-type-tag'
-            }, () => '视图') : null
-          ].filter(Boolean))
+            h('div', { class: 'table-meta-tags' }, [
+              h(ElTag, { 
+                size: 'small', 
+                type: rowData.tableType === 'VIEW' ? 'info' : 'success',
+                class: 'table-type-tag'
+              }, () => rowData.tableType === 'VIEW' ? '视图' : '表'),
+              h('span', { class: 'column-count' }, `${rowData.columnCount || 0}列`),
+              rowData.hasPrimaryKey ? h(ElTag, { 
+                size: 'small', 
+                type: 'warning',
+                class: 'pk-tag'
+              }, () => 'PK') : null
+            ].filter(Boolean))
+          ])
         ])
       })
     }
@@ -228,9 +423,18 @@ const columns = [
     key: 'remarks',
     title: '备注',
     dataKey: 'remarks',
+    width: 200,
     cellRenderer: ({ rowData }: any) => {
       const remarks = rowData.remarks || '-'
-      return h('div', { class: 'table-remarks-cell' }, [
+      return h('div', { 
+        class: 'table-row-cell table-remarks-cell full-width-cell',
+        style: { width: '100%', minHeight: '68px' },
+        onContextmenu: (e: MouseEvent) => {
+          e.preventDefault()
+          e.stopPropagation()
+          handleRowContextMenu(e, rowData)
+        }
+      }, [
         h('span', {
           class: 'table-remarks',
           title: remarks.length > 30 ? remarks : undefined
@@ -238,9 +442,262 @@ const columns = [
       ])
     }
   }
-]
+])
 
-// 方法
+// 方法 - 移除了左键点击选中逻辑
+
+// 查看字段功能
+const handleViewFields = async (table: TableInfo) => {
+  dialogTitle.value = `${table.tableName}${table.remarks ? ` - ${table.remarks}` : ''}`
+  showFieldDialog.value = true
+  fieldDialogLoading.value = true
+  
+  try {
+    const fields = await getTableColumnsApi(props.connectionId, table.tableName, props.schema)
+    tableFields.value = fields
+  } catch (error: any) {
+    ElMessage.error('获取字段信息失败：' + (error.message || '未知错误'))
+    tableFields.value = []
+  } finally {
+    fieldDialogLoading.value = false
+  }
+}
+
+
+// 处理 SQL 命令
+const handleSqlCommand = async (command: string, table: TableInfo) => {
+  if (!table || !table.tableName) {
+    console.error('Invalid table object:', table)
+    ElMessage.error('表信息无效，请重新选择')
+    return
+  }
+  
+  let sql = ''
+  try {
+    switch (command) {
+      case 'select':
+        sql = await generateSelectSql(table.tableName)
+        break
+      case 'count':
+        sql = `SELECT COUNT(*) FROM ${table.tableName};`
+        break
+      case 'describe':
+        sql = `DESC ${table.tableName};`
+        break
+      case 'insert':
+        sql = await generateInsertSql(table.tableName)
+        break
+      case 'update':
+        sql = await generateUpdateSql(table.tableName)
+        break
+      case 'delete':
+        const pkColumn = await getPrimaryKeyColumn(table.tableName)
+        sql = `DELETE FROM ${table.tableName} WHERE ${pkColumn} = ?;`
+        break
+      default:
+        throw new Error(`未知的 SQL 命令：${command}`)
+    }
+    
+    if (sql) {
+      emit('sql-generated', sql)
+      ElMessage.success(`已生成 ${getCommandDisplayName(command)} 语句`)
+    } else {
+      throw new Error('生成的 SQL 为空')
+    }
+  } catch (error: any) {
+    console.error('SQL generation error:', error)
+    ElMessage.error('生成 SQL 失败：' + (error.message || '未知错误'))
+  }
+}
+
+// 获取命令显示名称
+const getCommandDisplayName = (command: string): string => {
+  const names: Record<string, string> = {
+    'select': 'SELECT 查询',
+    'count': 'COUNT 查询', 
+    'describe': '表结构',
+    'insert': 'INSERT 模板',
+    'update': 'UPDATE 模板',
+    'delete': 'DELETE 模板'
+  }
+  return names[command] || command.toUpperCase()
+}
+
+// 获取主键列名
+const getPrimaryKeyColumn = async (tableName: string): Promise<string> => {
+  try {
+    const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
+    const pkColumn = columns.find((col: any) => col.isPrimaryKey)
+    return pkColumn?.columnName || 'id'
+  } catch (error) {
+    return 'id'
+  }
+}
+
+// 显示 SQL 菜单
+const showSqlMenuHandler = (event: Event, table: TableInfo) => {
+  if (!table || !table.tableName) {
+    console.error('Invalid table data for SQL menu:', table)
+    ElMessage.error('表数据无效')
+    return
+  }
+  
+  const target = event.target as HTMLElement
+  const rect = target.getBoundingClientRect()
+  
+  sqlMenuStyle.value = {
+    left: rect.left + 'px',
+    top: (rect.bottom + 5) + 'px'
+  }
+  sqlMenuTable.value = table
+  showSqlMenu.value = true
+}
+
+// 隐藏 SQL 菜单
+const hideSqlMenu = () => {
+  showSqlMenu.value = false
+  sqlMenuTable.value = null
+}
+
+// 处理行右键菜单
+const handleRowContextMenu = (event: MouseEvent, table: TableInfo) => {
+  if (!table || !table.tableName) {
+    console.error('Invalid table data for context menu:', table)
+    ElMessage.error('表数据无效')
+    return
+  }
+  
+  // 先关闭现有的菜单
+  hideContextMenu()
+  
+  // 使用 nextTick 确保菜单完全关闭后再打开新菜单
+  nextTick(() => {
+    const { clientX, clientY } = event
+    
+    // 调整菜单位置，确保不超出屏幕边界
+    const menuWidth = 180
+    const menuHeight = 240
+    const windowWidth = window.innerWidth
+    const windowHeight = window.innerHeight
+    
+    let left = clientX
+    let top = clientY
+    
+    if (left + menuWidth > windowWidth) {
+      left = windowWidth - menuWidth - 10
+    }
+    
+    if (top + menuHeight > windowHeight) {
+      top = windowHeight - menuHeight - 10
+    }
+    
+    contextMenuStyle.value = {
+      left: `${left}px`,
+      top: `${top}px`
+    }
+    
+    contextMenuTable.value = table
+    showContextMenu.value = true
+  })
+}
+
+// 隐藏右键菜单
+const hideContextMenu = () => {
+  showContextMenu.value = false
+  contextMenuTable.value = null
+}
+
+// 处理右键菜单命令
+const handleContextMenuCommand = async (command: string) => {
+  if (!contextMenuTable.value) {
+    ElMessage.error('未选择表，请重新右键点击')
+    return
+  }
+  
+  // 立即保存表格引用，避免异步操作中丢失
+  const tableRef = { ...contextMenuTable.value }
+  
+  // 隐藏菜单
+  hideContextMenu()
+  
+  try {
+    if (command === 'viewFields') {
+      await handleViewFields(tableRef)
+    } else {
+      await handleSqlCommand(command, tableRef)
+    }
+  } catch (error: any) {
+    console.error('Command execution failed:', error)
+    ElMessage.error('操作失败：' + (error.message || '未知错误'))
+  }
+}
+
+// 处理 SQL 菜单命令
+const handleSqlMenuCommand = async (command: string) => {
+  if (!sqlMenuTable.value) {
+    ElMessage.error('未选择表，请重新点击 SQL 按钮')
+    return
+  }
+  
+  // 先保存表格引用，再隐藏菜单
+  const tableRef = { ...sqlMenuTable.value }
+  hideSqlMenu()
+  await handleSqlCommand(command, tableRef)
+}
+
+// 获取行样式类 - 移除选中状态判断
+const getRowClass = ({ rowData }: any) => {
+  return 'table-row'
+}
+
+// 复制字段名
+const copyFieldName = async (fieldName: string) => {
+  try {
+    await navigator.clipboard.writeText(fieldName)
+    ElMessage.success(`已复制字段名：${fieldName}`)
+  } catch (error) {
+    // 降级方案
+    const textArea = document.createElement('textarea')
+    textArea.value = fieldName
+    document.body.appendChild(textArea)
+    textArea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textArea)
+    ElMessage.success(`已复制字段名：${fieldName}`)
+  }
+}
+
+// 复制所有字段名
+const copyAllFields = async () => {
+  try {
+    const fieldNames = filteredFields.value.map(field => field.columnName).join(', ')
+    await navigator.clipboard.writeText(fieldNames)
+    ElMessage.success(`已复制 ${filteredFields.value.length} 个字段名`)
+  } catch (error) {
+    // 降级方案
+    const fieldNames = filteredFields.value.map(field => field.columnName).join(', ')
+    const textArea = document.createElement('textarea')
+    textArea.value = fieldNames
+    document.body.appendChild(textArea)
+    textArea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textArea)
+    ElMessage.success(`已复制 ${filteredFields.value.length} 个字段名`)
+  }
+}
+
+// 重置字段搜索
+const resetFieldSearch = () => {
+  fieldSearchText.value = ''
+}
+
+// 监听字段弹框关闭，重置搜索
+watch(showFieldDialog, (newVal) => {
+  if (!newVal) {
+    resetFieldSearch()
+  }
+})
+
 const loadTables = async (useCache = true) => {
   if (!props.connectionId) return
 
@@ -311,8 +768,8 @@ const loadTables = async (useCache = true) => {
     
     ElMessage.success(`成功加载 ${allTables.length} 张表`)
   } catch (error: any) {
-    console.error('加载表列表失败:', error)
-    ElMessage.error('加载表列表失败: ' + (error.message || '未知错误'))
+    console.error('加载表列表失败：', error)
+    ElMessage.error('加载表列表失败：' + (error.message || '未知错误'))
   } finally {
     loading.value = false
   }
@@ -350,69 +807,17 @@ const handleSearch = () => {
   }, 300)
 }
 
-const searchTimeout = ref<any>(null)
-
-const handleRowClick = (row: TableInfo) => {
-  selectedTable.value = row
-  emit('table-click', row.tableName)
-}
-
-const handleRowRightClick = (event: MouseEvent, row: TableInfo) => {
-  event.preventDefault()
-  selectedTable.value = row
-  
-  nextTick(() => {
-    const menu = contextMenuRef.value
-    if (menu) {
-      menu.handleOpen()
-    }
-  })
-}
-
-const handleContextMenuCommand = async (command: string) => {
-  if (!selectedTable.value) return
-
-  const tableName = selectedTable.value.tableName
-  let sql = ''
-
-  try {
-    switch (command) {
-      case 'select':
-        sql = await generateSelectSql(tableName)
-        break
-      case 'count':
-        sql = `SELECT COUNT(*) FROM ${tableName};`
-        break
-      case 'describe':
-        sql = `DESC ${tableName};`
-        break
-      case 'insert':
-        sql = await generateInsertSql(tableName)
-        break
-      case 'update':
-        sql = await generateUpdateSql(tableName)
-        break
-      case 'delete':
-        sql = `DELETE FROM ${tableName} WHERE ;`
-        break
-      case 'refresh-single':
-        await refreshSingleTable(tableName)
-        return
-    }
-
-    if (sql) {
-      emit('sql-generated', sql)
-    }
-  } catch (error: any) {
-    ElMessage.error('操作失败: ' + (error.message || '未知错误'))
-  }
-}
-
 const generateSelectSql = async (tableName: string) => {
   try {
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const columnNames = columns.slice(0, 10).map((col: any) => col.columnName).join(', ')
-    return `SELECT ${columnNames}${columns.length > 10 ? ', ...' : ''} FROM ${tableName} LIMIT 100;`
+    // 如果字段数量较多，只选择前 10 个字段；否则使用所有字段
+    if (columns.length > 10) {
+      const columnNames = columns.slice(0, 10).map((col: any) => col.columnName).join(', ')
+      return `SELECT ${columnNames} FROM ${tableName} LIMIT 100;`
+    } else {
+      const columnNames = columns.map((col: any) => col.columnName).join(', ')
+      return `SELECT ${columnNames} FROM ${tableName} LIMIT 100;`
+    }
   } catch (error) {
     return `SELECT * FROM ${tableName} LIMIT 100;`
   }
@@ -441,17 +846,6 @@ const generateUpdateSql = async (tableName: string) => {
   }
 }
 
-const refreshSingleTable = async (tableName: string) => {
-  try {
-    // 这里可以实现单表刷新逻辑
-    // 暂时使用全量刷新
-    await refreshTables()
-    ElMessage.success(`已刷新表 ${tableName} 的信息`)
-  } catch (error: any) {
-    ElMessage.error('刷新表信息失败: ' + (error.message || '未知错误'))
-  }
-}
-
 const getEmptyDescription = () => {
   if (loading.value) return '加载中...'
   if (searchText.value) return '未找到匹配的表'
@@ -476,11 +870,56 @@ watch(() => props.schema, () => {
   }
 })
 
+// 全局点击事件处理器
+const handleGlobalClick = (e: MouseEvent) => {
+  const target = e.target as Element
+  
+  // 如果点击的不是右键菜单，则隐藏菜单
+  if (showContextMenu.value) {
+    const contextMenuEl = document.querySelector('.context-menu')
+    const overlayEl = document.querySelector('.context-menu-overlay')
+    
+    if (contextMenuEl && !contextMenuEl.contains(target) && 
+        overlayEl && !overlayEl.contains(target)) {
+      hideContextMenu()
+    }
+  }
+  
+  if (showSqlMenu.value) {
+    const sqlMenuEl = document.querySelector('.sql-menu')
+    const overlayEl = document.querySelector('.sql-menu-overlay')
+    
+    // 不隐藏 SQL 菜单，如果点击的是 SQL 按钮或其子元素
+    const isSqlButton = target.closest('.action-buttons') !== null
+    
+    if (!isSqlButton && sqlMenuEl && !sqlMenuEl.contains(target) && 
+        overlayEl && !overlayEl.contains(target)) {
+      hideSqlMenu()
+    }
+  }
+}
+
 // 生命周期
 onMounted(() => {
   if (props.connectionId) {
     loadTables(true)
   }
+  
+  // 延迟添加全局点击事件监听器，避免与初始化点击冲突
+  setTimeout(() => {
+    document.addEventListener('click', handleGlobalClick)
+    document.addEventListener('contextmenu', (e) => {
+      // 如果右键菜单已显示，阻止默认的浏览器右键菜单
+      if (showContextMenu.value) {
+        e.preventDefault()
+      }
+    })
+  }, 100)
+})
+
+// 组件卸载时清理事件监听器
+onUnmounted(() => {
+  document.removeEventListener('click', handleGlobalClick)
 })
 </script>
 
@@ -538,102 +977,106 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* 全局tooltip样式 */
-:global(.table-info-tooltip) {
-  max-width: 200px;
-}
-
-:global(.table-info-tooltip .el-popper__arrow::before) {
-  background: var(--el-bg-color-overlay);
-  border: 1px solid var(--el-border-color-light);
-}
-
-/* 表格行hover效果 */
-:global(.el-table-v2__row:hover) {
-  background-color: var(--el-fill-color-lighter) !important;
-}
-
-/* 表格头部样式优化 */
-:global(.el-table-v2__header-row) {
-  background-color: var(--el-fill-color-light);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-/* 响应式优化 */
-@media (max-width: 768px) {
-  .table-name-cell {
-    padding: 6px 8px;
-    gap: 6px;
-  }
-  
-  .table-name {
-    font-size: 14px;
-  }
-  
-  .table-remarks {
-    font-size: 12px;
-  }
-}
-
-.table-name-cell {
+/* 表格行统一样式 */
+.table-row-cell {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
+  justify-content: flex-start;
+  padding: 12px 0;
+  border-radius: 8px;
   transition: all 0.2s ease;
-  cursor: pointer;
+  cursor: context-menu;
+  height: 100%;
+  min-height: 68px;
+  box-sizing: border-box;
 }
 
-.table-name-cell:hover {
+/* 确保整行区域都能响应右键事件 */
+.full-width-cell {
+  width: 100% !important;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.table-row-cell:hover {
   background-color: var(--el-fill-color-light);
   transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-.table-icon {
-  color: var(--el-color-primary);
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
+/* 表格内容样式 */
 .table-name-content {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
   flex: 1;
   min-width: 0;
+  height: 100%;
 }
 
 .table-name {
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 15px;
   color: var(--el-text-color-primary);
-  transition: color 0.2s ease;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.table-name-cell:hover .table-name {
+.table-row-cell:hover .table-name {
   color: var(--el-color-primary);
 }
 
+.table-meta-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 .table-type-tag {
-  flex-shrink: 0;
+  font-weight: 500;
+  font-size: 12px;
+  height: 20px;
+  padding: 0 6px;
+}
+
+.column-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pk-tag {
+  font-weight: 600;
+  font-size: 11px;
+  height: 18px;
+  padding: 0 5px;
 }
 
 .table-remarks-cell {
-  padding: 8px 12px;
+  padding: 12px 0;
+  height: 100%;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
 }
 
 .table-remarks {
   color: var(--el-text-color-secondary);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
   display: block;
 }
 
-/* Tooltip样式优化 */
+/* Tooltip 样式优化 */
 .tooltip-content {
   padding: 8px 0;
 }
@@ -657,6 +1100,269 @@ onMounted(() => {
   font-weight: 400;
 }
 
+/* 右键菜单样式 */
+.context-menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: transparent;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  padding: 6px 0;
+  min-width: 180px;
+  backdrop-filter: blur(10px);
+  animation: contextMenuFadeIn 0.15s ease-out;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.context-menu-item:hover {
+  background-color: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.context-menu-item .el-icon {
+  font-size: 16px;
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.context-menu-item:hover .el-icon {
+  color: var(--el-color-primary);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background-color: var(--el-border-color-lighter);
+  margin: 6px 0;
+}
+
+/* SQL 菜单样式 */
+.sql-menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9998;
+  background: transparent;
+}
+
+.sql-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  min-width: 160px;
+  backdrop-filter: blur(8px);
+}
+
+.sql-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  transition: all 0.2s ease;
+}
+
+.sql-menu-item:hover {
+  background-color: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.sql-menu-item .el-icon {
+  font-size: 16px;
+  color: var(--el-text-color-secondary);
+}
+
+.sql-menu-item:hover .el-icon {
+  color: var(--el-color-primary);
+}
+
+.sql-menu-divider {
+  height: 1px;
+  background-color: var(--el-border-color-lighter);
+  margin: 4px 0;
+}
+
+/* 字段弹框样式 */
+.field-dialog {
+  --el-dialog-border-radius: 12px;
+}
+
+.field-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 0 4px;
+}
+
+.field-search {
+  width: 300px;
+}
+
+.field-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-dialog-content {
+  max-height: 500px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.field-table {
+  --el-table-border-radius: 8px;
+}
+
+.field-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.pk-icon {
+  color: var(--el-color-warning);
+  font-size: 14px;
+}
+
+.field-name {
+  font-weight: 500;
+  flex: 1;
+}
+
+.field-name.is-primary {
+  color: var(--el-color-warning);
+  font-weight: 600;
+}
+
+.copy-btn {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  padding: 4px;
+  margin-left: auto;
+}
+
+.field-name-cell:hover .copy-btn {
+  opacity: 1;
+}
+
+.type-tag {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-weight: 500;
+}
+
+.field-remarks {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* 字段表格行 hover 效果 */
+:global(.field-table .el-table__row:hover) {
+  background-color: var(--el-fill-color-light) !important;
+}
+
+/* 主键行特殊样式 */
+:global(.field-table .el-table__row:has(.is-primary)) {
+  background-color: var(--el-color-warning-light-9) !important;
+}
+
+:global(.field-table .el-table__row:has(.is-primary):hover) {
+  background-color: var(--el-color-warning-light-8) !important;
+}
+
+/* 全局 tooltip 样式 */
+:global(.table-info-tooltip) {
+  max-width: 200px;
+}
+
+:global(.table-info-tooltip .el-popper__arrow::before) {
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+}
+
+/* 表格行 hover 效果 */
+:global(.el-table-v2__row:hover) {
+  background-color: var(--el-fill-color-lighter) !important;
+}
+
+/* 表格行样式 */
+:global(.table-row) {
+  transition: all 0.2s ease;
+}
+
+:global(.table-row:hover) {
+  background-color: var(--el-fill-color-lighter) !important;
+}
+
+/* 确保表格单元格填满整个可用空间 */
+:global(.el-table-v2__row-cell) {
+  padding: 0 16px !important;
+  display: flex;
+  align-items: center;
+}
+
+:global(.el-table-v2__row-cell > *) {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+/* 表格头部样式优化 */
+:global(.el-table-v2__header-row) {
+  background-color: var(--el-fill-color-light);
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
 .loading-overlay {
   position: absolute;
   top: 0;
@@ -672,5 +1378,62 @@ onMounted(() => {
 
 .empty-actions {
   margin-top: 16px;
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .table-row-cell {
+    padding: 10px 12px;
+  }
+  
+  .table-name {
+    font-size: 14px;
+  }
+  
+  .table-name-content {
+    gap: 4px;
+  }
+  
+  .table-meta-tags {
+    gap: 6px;
+  }
+  
+  .table-type-tag {
+    font-size: 11px;
+    height: 18px;
+    padding: 0 5px;
+  }
+  
+  .column-count {
+    font-size: 11px;
+  }
+  
+  .pk-tag {
+    font-size: 10px;
+    height: 16px;
+    padding: 0 4px;
+  }
+  
+  .table-remarks {
+    font-size: 13px;
+  }
+  
+  .context-menu {
+    min-width: 160px;
+  }
+  
+  .context-menu-item {
+    padding: 10px 16px;
+    font-size: 16px;
+  }
+  
+  .sql-menu {
+    min-width: 160px;
+  }
+  
+  .sql-menu-item {
+    padding: 10px 16px;
+    font-size: 16px;
+  }
 }
 </style>
