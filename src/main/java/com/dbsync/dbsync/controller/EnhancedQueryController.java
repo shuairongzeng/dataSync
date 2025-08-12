@@ -47,12 +47,14 @@ public class EnhancedQueryController {
                 return ResponseEntity.badRequest().body(error);
             }
             
-            // Execute query with caching
+            // Execute query with caching and pagination
             QueryResult result = enhancedQueryService.executeQuery(
                 request.getConnectionId(), 
                 request.getSql(), 
                 request.getSchema(),
-                request.isUseCache() != null ? request.isUseCache() : true
+                request.isUseCache() != null ? request.isUseCache() : true,
+                request.getPage(),
+                request.getPageSize()
             );
             
             // Save to query history if requested
@@ -189,6 +191,8 @@ public class EnhancedQueryController {
         private String schema;
         private Boolean useCache = true;
         private boolean saveHistory = true;
+        private Integer page;
+        private Integer pageSize;
         
         // Getters and Setters
         public Long getConnectionId() { return connectionId; }
@@ -201,5 +205,9 @@ public class EnhancedQueryController {
         public void setUseCache(Boolean useCache) { this.useCache = useCache; }
         public boolean isSaveHistory() { return saveHistory; }
         public void setSaveHistory(boolean saveHistory) { this.saveHistory = saveHistory; }
+        public Integer getPage() { return page; }
+        public void setPage(Integer page) { this.page = page; }
+        public Integer getPageSize() { return pageSize; }
+        public void setPageSize(Integer pageSize) { this.pageSize = pageSize; }
     }
 }

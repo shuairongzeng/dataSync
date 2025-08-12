@@ -41,18 +41,34 @@ public class EnhancedQueryService {
      * Execute SQL query with caching support
      */
     public QueryResult executeQuery(Long connectionId, String sql, String schema, boolean useCache) {
+        return executeQuery(connectionId, sql, schema, useCache, null, null);
+    }
+    
+    /**
+     * Execute SQL query with pagination support
+     */
+    public QueryResult executeQuery(Long connectionId, String sql, String schema, boolean useCache, Integer page, Integer pageSize) {
         long startTime = System.currentTimeMillis();
         
         try {
-            // Generate cache key for this query
-            String cacheKey = cacheService.generateQueryCacheKey(connectionId.toString(), sql, schema);
+            // 设置默认分页参数
+            boolean isPaginated = (page != null && pageSize != null);
+            int currentPage = isPaginated ? Math.max(1, page) : 1;
+            int size = isPaginated ? Math.max(1, Math.min(pageSize, 1000)) : 10000; // 限制最大页面大小
+            
+            // Generate cache key for this query (include pagination info)
+            String cacheKey = isPaginated ? 
+                cacheService.generateQueryCacheKey(connectionId.toString(), sql + "_page_" + currentPage + "_size_" + size, schema) :
+                cacheService.generateQueryCacheKey(connectionId.toString(), sql, schema);
             
             // Try to get from cache first if enabled
             if (useCache) {
                 Optional<QueryResult> cachedResult = cacheService.get(cacheKey, QueryResult.class);
                 if (cachedResult.isPresent()) {
+                    QueryResult result = cachedResult.get();
+                    result.setFromCache(true);
                     logger.debug("Query result retrieved from cache: {}", cacheKey);
-                    return cachedResult.get();
+                    return result;
                 }
             }
             
@@ -68,25 +84,37 @@ public class EnhancedQueryService {
             
             String jdbcUrl = buildJdbcUrl(connection, schema);
             
-            try (Connection conn = DriverManager.getConnection(jdbcUrl, connection.getUsername(), connection.getPassword());
-                 Statement stmt = conn.createStatement()) {
-                
-                // Set query timeout and max rows
-                stmt.setQueryTimeout(30);
-                stmt.setMaxRows(10000);
-                
-                boolean hasResultSet = stmt.execute(sql);
-                long executionTime = System.currentTimeMillis() - startTime;
+            try (Connection conn = DriverManager.getConnection(jdbcUrl, connection.getUsername(), connection.getPassword())) {
                 
                 QueryResult result;
-                if (hasResultSet) {
-                    try (ResultSet rs = stmt.getResultSet()) {
-                        result = processResultSet(rs, executionTime);
-                    }
+                boolean hasResultSet = false;
+                long executionTime = System.currentTimeMillis() - startTime;
+                
+                if (isPaginated && isSelectQuery(sql)) {
+                    // 分页查询处理
+                    result = executePaginatedQuery(conn, sql, currentPage, size, executionTime);
+                    hasResultSet = true; // 分页查询总是返回结果集
                 } else {
-                    int updateCount = stmt.getUpdateCount();
-                    result = createUpdateResult(updateCount, executionTime);
+                    // 非分页查询处理
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.setQueryTimeout(30);
+                        stmt.setMaxRows(10000);
+                        
+                        hasResultSet = stmt.execute(sql);
+                        executionTime = System.currentTimeMillis() - startTime;
+                        
+                        if (hasResultSet) {
+                            try (ResultSet rs = stmt.getResultSet()) {
+                                result = processResultSet(rs, executionTime);
+                            }
+                        } else {
+                            int updateCount = stmt.getUpdateCount();
+                            result = createUpdateResult(updateCount, executionTime);
+                        }
+                    }
                 }
+                
+                result.setFromCache(false);
                 
                 // Cache the result if it's a SELECT query and caching is enabled
                 if (useCache && hasResultSet && isSelectQuery(sql)) {
@@ -233,6 +261,76 @@ public class EnhancedQueryService {
             
         } catch (Exception e) {
             logger.error("Cache warmup failed for connection {}: {}", connectionId, e.getMessage());
+        }
+    }
+    
+    /**
+     * Execute paginated query
+     */
+    private QueryResult executePaginatedQuery(Connection conn, String sql, int page, int pageSize, long executionTime) throws SQLException {
+        // 首先获取总记录数
+        int totalCount = getTotalCount(conn, sql);
+        int totalPages = (int) Math.ceil((double) totalCount / pageSize);
+        boolean hasMore = page < totalPages;
+        
+        // 构建分页SQL
+        String paginatedSql = buildPaginatedSql(sql, page, pageSize, conn.getMetaData().getDatabaseProductName());
+        
+        try (PreparedStatement stmt = conn.prepareStatement(paginatedSql)) {
+            stmt.setQueryTimeout(30);
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                QueryResult result = processResultSet(rs, executionTime);
+                
+                // 设置分页信息
+                result.setCurrentPage(page);
+                result.setPageSize(pageSize);
+                result.setTotalPages(totalPages);
+                result.setHasMore(hasMore);
+                result.setTotalRows(totalCount); // 设置为总记录数而不是当前页记录数
+                
+                return result;
+            }
+        }
+    }
+    
+    /**
+     * Get total count for pagination
+     */
+    private int getTotalCount(Connection conn, String sql) throws SQLException {
+        // 构建COUNT查询
+        String countSql = "SELECT COUNT(*) FROM (" + sql + ") AS count_query";
+        
+        try (PreparedStatement stmt = conn.prepareStatement(countSql);
+             ResultSet rs = stmt.executeQuery()) {
+            
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
+            return 0;
+        }
+    }
+    
+    /**
+     * Build paginated SQL based on database type
+     */
+    private String buildPaginatedSql(String sql, int page, int pageSize, String databaseProductName) {
+        int offset = (page - 1) * pageSize;
+        
+        String dbType = databaseProductName.toLowerCase();
+        
+        if (dbType.contains("mysql")) {
+            return sql + " LIMIT " + pageSize + " OFFSET " + offset;
+        } else if (dbType.contains("postgresql") || dbType.contains("vastbase")) {
+            return sql + " LIMIT " + pageSize + " OFFSET " + offset;
+        } else if (dbType.contains("oracle")) {
+            // Oracle 12c+ syntax
+            return sql + " OFFSET " + offset + " ROWS FETCH NEXT " + pageSize + " ROWS ONLY";
+        } else if (dbType.contains("sql server")) {
+            return sql + " OFFSET " + offset + " ROWS FETCH NEXT " + pageSize + " ROWS ONLY";
+        } else {
+            // 默认使用LIMIT OFFSET语法
+            return sql + " LIMIT " + pageSize + " OFFSET " + offset;
         }
     }
     

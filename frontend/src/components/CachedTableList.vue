@@ -58,9 +58,9 @@
             :data="displayData"
             :width="width"
             :height="height"
-            :row-height="60"
-            :header-height="50"
-            :estimated-row-height="60"
+            :row-height="56"
+            :header-height="48"
+            :estimated-row-height="56"
             @row-click="handleRowClick"
             @row-contextmenu="handleRowRightClick"
             class="virtual-table"
@@ -118,7 +118,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch, h } from 'vue'
-import { ElMessage, ElIcon, ElTag, ElText } from 'element-plus'
+import { ElMessage, ElIcon, ElTag, ElText, ElTooltip } from 'element-plus'
 import { Search, Refresh, Clock, Document } from '@element-plus/icons-vue'
 import { tableCacheManager, type TableInfo, type CacheMetadata } from '@/utils/TableCacheManager'
 import { getTablesWithPaginationApi, getTableColumnsApi } from '@/api/database'
@@ -180,63 +180,62 @@ const cacheStatus = computed(() => {
   return { type: 'info', text: '已缓存' }
 })
 
-// 表格列定义
+// 表格列定义 - 简化为只显示表名和备注，其他信息通过tooltip显示
 const columns = [
   {
     key: 'tableName',
     title: '表名',
     dataKey: 'tableName',
-    width: 200,
+    width: 350,
     cellRenderer: ({ rowData }: any) => {
-      return h('div', { class: 'table-name-cell' }, [
-        h(ElIcon, { class: 'table-icon' }, () => h(Document)),
-        h('span', { class: 'table-name' }, rowData.tableName),
-        rowData.tableType === 'VIEW' ? h(ElTag, { size: 'small', type: 'info' }, () => '视图') : null
-      ].filter(Boolean))
-    }
-  },
-  {
-    key: 'columnCount',
-    title: '列数',
-    dataKey: 'columnCount',
-    width: 80,
-    align: 'center'
-  },
-  {
-    key: 'tableType',
-    title: '类型',
-    dataKey: 'tableType',
-    width: 80,
-    align: 'center',
-    cellRenderer: ({ rowData }: any) => {
-      return h(ElTag, {
-        size: 'small',
-        type: rowData.tableType === 'VIEW' ? 'info' : 'primary'
-      }, () => rowData.tableType === 'VIEW' ? '视图' : '表')
+      const tooltipContent = h('div', { class: 'tooltip-content' }, [
+        h('div', { class: 'tooltip-item' }, [
+          h('span', { class: 'tooltip-label' }, '类型：'),
+          h('span', { class: 'tooltip-value' }, rowData.tableType === 'VIEW' ? '视图' : '表')
+        ]),
+        h('div', { class: 'tooltip-item' }, [
+          h('span', { class: 'tooltip-label' }, '列数：'),
+          h('span', { class: 'tooltip-value' }, `${rowData.columnCount || 0} 列`)
+        ]),
+        h('div', { class: 'tooltip-item' }, [
+          h('span', { class: 'tooltip-label' }, '主键：'),
+          h('span', { class: 'tooltip-value' }, rowData.hasPrimaryKey ? '有' : '无')
+        ])
+      ])
+      
+      return h(ElTooltip, {
+        placement: 'right',
+        showAfter: 300,
+        hideAfter: 100,
+        popperClass: 'table-info-tooltip'
+      }, {
+        content: () => tooltipContent,
+        default: () => h('div', { class: 'table-name-cell' }, [
+          h(ElIcon, { class: 'table-icon' }, () => h(Document)),
+          h('div', { class: 'table-name-content' }, [
+            h('span', { class: 'table-name' }, rowData.tableName),
+            rowData.tableType === 'VIEW' ? h(ElTag, { 
+              size: 'small', 
+              type: 'info',
+              class: 'table-type-tag'
+            }, () => '视图') : null
+          ].filter(Boolean))
+        ])
+      })
     }
   },
   {
     key: 'remarks',
     title: '备注',
     dataKey: 'remarks',
-    width: 300,
     cellRenderer: ({ rowData }: any) => {
-      return h('span', {
-        class: 'table-remarks',
-        title: rowData.remarks
-      }, rowData.remarks || '-')
-    }
-  },
-  {
-    key: 'hasPrimaryKey',
-    title: '主键',
-    dataKey: 'hasPrimaryKey',
-    width: 80,
-    align: 'center',
-    cellRenderer: ({ rowData }: any) => {
-      return rowData.hasPrimaryKey
-        ? h(ElIcon, { color: '#67C23A' }, () => '✓')
-        : h(ElIcon, { color: '#F56C6C' }, () => '✗')
+      const remarks = rowData.remarks || '-'
+      return h('div', { class: 'table-remarks-cell' }, [
+        h('span', {
+          class: 'table-remarks',
+          title: remarks.length > 30 ? remarks : undefined
+        }, remarks.length > 30 ? `${remarks.substring(0, 30)}...` : remarks)
+      ])
     }
   }
 ]
@@ -534,34 +533,128 @@ onMounted(() => {
 }
 
 .virtual-table {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* 全局tooltip样式 */
+:global(.table-info-tooltip) {
+  max-width: 200px;
+}
+
+:global(.table-info-tooltip .el-popper__arrow::before) {
+  background: var(--el-bg-color-overlay);
   border: 1px solid var(--el-border-color-light);
+}
+
+/* 表格行hover效果 */
+:global(.el-table-v2__row:hover) {
+  background-color: var(--el-fill-color-lighter) !important;
+}
+
+/* 表格头部样式优化 */
+:global(.el-table-v2__header-row) {
+  background-color: var(--el-fill-color-light);
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .table-name-cell {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  
+  .table-name {
+    font-size: 14px;
+  }
+  
+  .table-remarks {
+    font-size: 12px;
+  }
 }
 
 .table-name-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.table-name-cell:hover {
+  background-color: var(--el-fill-color-light);
+  transform: translateX(2px);
 }
 
 .table-icon {
   color: var(--el-color-primary);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.table-name-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .table-name {
   font-weight: 500;
-  cursor: pointer;
+  color: var(--el-text-color-primary);
+  transition: color 0.2s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.table-name:hover {
+.table-name-cell:hover .table-name {
   color: var(--el-color-primary);
+}
+
+.table-type-tag {
+  flex-shrink: 0;
+}
+
+.table-remarks-cell {
+  padding: 8px 12px;
 }
 
 .table-remarks {
   color: var(--el-text-color-secondary);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+  display: block;
+}
+
+/* Tooltip样式优化 */
+.tooltip-content {
+  padding: 8px 0;
+}
+
+.tooltip-item {
+  display: flex;
+  align-items: center;
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tooltip-label {
+  color: var(--el-text-color-secondary);
+  min-width: 40px;
+  font-weight: 500;
+}
+
+.tooltip-value {
+  color: var(--el-text-color-primary);
+  font-weight: 400;
 }
 
 .loading-overlay {

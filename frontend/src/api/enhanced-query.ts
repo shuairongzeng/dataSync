@@ -19,6 +19,11 @@ export interface EnhancedQueryResponse {
   message?: string;
   fromCache?: boolean;
   cacheKey?: string;
+  // Pagination fields
+  currentPage?: number;
+  pageSize?: number;
+  totalPages?: number;
+  hasMore?: boolean;
 }
 
 // Cache Statistics Interface
@@ -34,6 +39,30 @@ export interface CacheStats {
 export const executeEnhancedQueryApi = (data: EnhancedQueryRequest) => {
   return http.request<EnhancedQueryResponse>("post", "/api/enhanced-query/execute", { 
     data,
+    timeout: 60000 // 60 seconds timeout for query execution
+  });
+};
+
+/** Execute paginated SQL query with enhanced caching support */
+export const executeEnhancedQueryPaginated = (
+  connectionId: number,
+  sql: string,
+  page: number = 1,
+  pageSize: number = 50,
+  schema?: string,
+  useCache: boolean = true,
+  saveHistory: boolean = true
+) => {
+  return http.request<EnhancedQueryResponse>("post", "/api/enhanced-query/execute", { 
+    data: {
+      connectionId,
+      sql,
+      schema,
+      useCache,
+      saveHistory,
+      page,
+      pageSize
+    },
     timeout: 60000 // 60 seconds timeout for query execution
   });
 };
