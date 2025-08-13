@@ -47,6 +47,28 @@ public class DbConnectionController {
     private QueryHistoryService queryHistoryService;
 
     /**
+     * 根据ID获取单个数据库连接
+     */
+    @GetMapping("/connections/{id}")
+    public Object getConnectionById(@PathVariable Long id) {
+        try {
+            DbConnection connection = dbConnectionService.getConnectionById(id);
+            if (connection != null) {
+                return connection;
+            } else {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "连接不存在");
+                return error;
+            }
+        } catch (Exception e) {
+            logger.error("获取数据库连接失败", e);
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return error;
+        }
+    }
+
+    /**
      * 获取所有数据库连接
      */
     @GetMapping("/connections")
@@ -148,26 +170,6 @@ public class DbConnectionController {
         }
     }
 
-    /**
-     * 根据ID获取数据库连接
-     */
-    @GetMapping("/connections/{id}")
-    public Object getConnectionById(@PathVariable Long id) {
-        try {
-            DbConnection connection = dbConnectionService.getConnectionById(id);
-            if (connection != null) {
-                return connection;
-            } else {
-                Map<String, String> error = new HashMap<>();
-                error.put("error", "数据库连接不存在");
-                return error;
-            }
-        } catch (Exception e) {
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "查询失败");
-            return error;
-        }
-    }
 
     /**
      * 分页获取数据库连接的表列表

@@ -81,7 +81,8 @@
 import { ref, computed, onMounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElIcon, ElTag } from 'element-plus'
 import { Search, Document } from '@element-plus/icons-vue'
-import { getTablesWithPaginationApi, getTableColumnsApi } from '@/api/database'
+import { getTablesWithPaginationApi, getTableColumnsApi, getConnectionByIdApi } from '@/api/database'
+import { generateSelectQuery, generateInsertQuery, generateUpdateQuery, generateDeleteQuery, generateDescribeQuery } from '@/utils/SqlGenerator'
 
 // Props
 interface Props {
@@ -109,6 +110,10 @@ const currentPage = ref(1)
 const pageSize = ref(50)
 const hasMore = ref(false)
 const selectedTable = ref<any>(null)
+
+// 数据库连接信息
+const connectionInfo = ref<any>(null)
+const dbType = ref('')
 
 // 容器引用
 const containerRef = ref()
@@ -274,7 +279,7 @@ const handleContextMenuCommand = async (command: string) => {
         sql = `SELECT COUNT(*) FROM ${tableName};`
         break
       case 'describe':
-        sql = `DESC ${tableName};`
+        sql = await generateDescribeSql(tableName)
         break
       case 'insert':
         sql = await generateInsertSql(tableName)
@@ -283,7 +288,7 @@ const handleContextMenuCommand = async (command: string) => {
         sql = await generateUpdateSql(tableName)
         break
       case 'delete':
-        sql = `DELETE FROM ${tableName} WHERE ;`
+        sql = await generateDeleteSql(tableName)
         break
     }
 
@@ -295,38 +300,93 @@ const handleContextMenuCommand = async (command: string) => {
   }
 }
 
+// 获取数据库连接信息
+const loadConnectionInfo = async () => {
+  try {
+    if (!connectionInfo.value) {
+      const result = await getConnectionByIdApi(props.connectionId)
+      connectionInfo.value = result
+      dbType.value = result.dbType || 'mysql'
+    }
+  } catch (error: any) {
+    console.warn('获取数据库连接信息失败：', error)
+    dbType.value = 'mysql'
+  }
+}
+
 const generateSelectSql = async (tableName: string) => {
   try {
+    await loadConnectionInfo()
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const columnNames = columns.slice(0, 10).map((col: any) => col.columnName).join(', ')
-    return `SELECT ${columnNames}${columns.length > 10 ? ', ...' : ''} FROM ${tableName} LIMIT 100;`
+    const columnNames = columns.slice(0, 10).map((col: any) => col.columnName)
+    return generateSelectQuery(dbType.value, tableName, columnNames, props.schema)
   } catch (error) {
-    return `SELECT * FROM ${tableName} LIMIT 100;`
+    await loadConnectionInfo()
+    return generateSelectQuery(dbType.value, tableName, [], props.schema)
   }
 }
 
 const generateInsertSql = async (tableName: string) => {
   try {
+    await loadConnectionInfo()
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const columnNames = columns.filter((col: any) => !col.isAutoIncrement).map((col: any) => col.columnName)
-    const values = columnNames.map(() => '?').join(', ')
-    return `INSERT INTO ${tableName} (${columnNames.join(', ')}) VALUES (${values});`
+    const insertColumns = columns
+      .filter((col: any) => !col.isAutoIncrement)
+      .map((col: any) => ({
+        columnName: col.columnName,
+        dataType: col.dataType || 'VARCHAR',
+        nullable: col.nullable !== false
+      }))
+    return generateInsertQuery(dbType.value, tableName, insertColumns, props.schema)
   } catch (error) {
-    return `INSERT INTO ${tableName} () VALUES ();`
+    await loadConnectionInfo()
+    return generateInsertQuery(dbType.value, tableName, [], props.schema)
   }
 }
 
 const generateUpdateSql = async (tableName: string) => {
   try {
+    await loadConnectionInfo()
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const updateColumns = columns.filter((col: any) => !col.isPrimaryKey && !col.isAutoIncrement)
-      .slice(0, 3).map((col: any) => `${col.columnName} = ?`).join(', ')
-    const pkColumn = columns.find((col: any) => col.isPrimaryKey)?.columnName || 'id'
-    return `UPDATE ${tableName} SET ${updateColumns} WHERE ${pkColumn} = ?;`
+    const updateColumns = columns.map((col: any) => ({
+      columnName: col.columnName,
+      dataType: col.dataType || 'VARCHAR',
+      isPrimaryKey: col.isPrimaryKey === true
+    }))
+    return generateUpdateQuery(dbType.value, tableName, updateColumns, props.schema)
   } catch (error) {
-    return `UPDATE ${tableName} SET  WHERE ;`
+    await loadConnectionInfo()
+    return generateUpdateQuery(dbType.value, tableName, [], props.schema)
   }
 }
+
+const generateDeleteSql = async (tableName: string) => {
+  try {
+    await loadConnectionInfo()
+    const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
+    const primaryKeys = columns
+      .filter((col: any) => col.isPrimaryKey === true)
+      .map((col: any) => ({
+        columnName: col.columnName,
+        dataType: col.dataType || 'VARCHAR'
+      }))
+    return generateDeleteQuery(dbType.value, tableName, primaryKeys, props.schema)
+  } catch (error) {
+    await loadConnectionInfo()
+    return generateDeleteQuery(dbType.value, tableName, [], props.schema)
+  }
+}
+
+const generateDescribeSql = async (tableName: string) => {
+  try {
+    await loadConnectionInfo()
+    return generateDescribeQuery(dbType.value, tableName, props.schema)
+  } catch (error) {
+    await loadConnectionInfo()
+    return generateDescribeQuery(dbType.value, tableName, props.schema)
+  }
+}
+
 
 // 监听器
 watch(() => props.connectionId, () => {

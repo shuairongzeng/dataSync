@@ -72,8 +72,9 @@ public class DatabaseMetadataUtil {
             case "vastbase":
                 return getPostgreSQLTables(connection, schemaName);
             case "oracle":
-            case "dameng":
                 return getOracleTables(connection, schemaName);
+            case "dameng":
+                return getDamengTables(connection, schemaName);
             case "sqlserver":
                 return getSQLServerTables(connection, schemaName);
             default:
@@ -92,8 +93,9 @@ public class DatabaseMetadataUtil {
             case "vastbase":
                 return getPostgreSQLColumns(connection, tableName, schemaName);
             case "oracle":
-            case "dameng":
                 return getOracleColumns(connection, tableName, schemaName);
+            case "dameng":
+                return getDamengColumns(connection, tableName, schemaName);
             case "sqlserver":
                 return getSQLServerColumns(connection, tableName, schemaName);
             default:
@@ -646,8 +648,9 @@ public class DatabaseMetadataUtil {
             case "vastbase":
                 return getPostgreSQLBasicTables(connection, schemaName);
             case "oracle":
-            case "dameng":
                 return getOracleBasicTables(connection, schemaName);
+            case "dameng":
+                return getDamengBasicTables(connection, schemaName);
             case "sqlserver":
                 return getSQLServerBasicTables(connection, schemaName);
             default:
@@ -873,5 +876,204 @@ public class DatabaseMetadataUtil {
 
             return ascending ? result : -result;
         });
+    }
+    
+    /**
+     * 达梦数据库特定的列信息获取方法
+     */
+    private static List<ColumnInfo> getDamengColumns(Connection connection, String tableName, String schemaName) throws SQLException {
+        List<ColumnInfo> columns = new ArrayList<>();
+        
+        // 优先尝试使用 JDBC 元数据方法，这是最兼容的方式
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            
+            try (ResultSet rs = metaData.getColumns(null, schemaName, tableName.toUpperCase(), null)) {
+                int position = 1;
+                while (rs.next()) {
+                    ColumnInfo columnInfo = new ColumnInfo();
+                    columnInfo.setColumnName(rs.getString("COLUMN_NAME"));
+                    columnInfo.setDataType(rs.getString("TYPE_NAME"));
+                    columnInfo.setTypeName(rs.getString("TYPE_NAME"));
+                    columnInfo.setColumnSize(rs.getInt("COLUMN_SIZE"));
+                    columnInfo.setDecimalDigits(rs.getInt("DECIMAL_DIGITS"));
+                    columnInfo.setNullable(rs.getInt("NULLABLE") == DatabaseMetaData.columnNullable);
+                    columnInfo.setDefaultValue(rs.getString("COLUMN_DEF"));
+                    columnInfo.setRemarks(rs.getString("REMARKS"));
+                    columnInfo.setOrdinalPosition(position++);
+                    
+                    columns.add(columnInfo);
+                }
+            }
+            
+            // 如果通过 JDBC 元数据获取到了数据，直接返回
+            if (!columns.isEmpty()) {
+                return columns;
+            }
+        } catch (SQLException e) {
+            // JDBC 元数据方法失败，继续尝试其他方法
+            System.out.println("达梦数据库 JDBC 元数据查询失败，尝试 SQL 查询: " + e.getMessage());
+        }
+        
+        // 如果 JDBC 元数据方法失败，尝试使用达梦数据库的系统表查询
+        try {
+            String sql;
+            if (schemaName != null && !schemaName.trim().isEmpty()) {
+                // 使用 ALL_TAB_COLUMNS 查询指定 schema 的表
+                sql = "SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, " +
+                      "DATA_DEFAULT, COLUMN_ID, COMMENTS FROM ALL_TAB_COLUMNS " +
+                      "WHERE OWNER = UPPER(?) AND TABLE_NAME = UPPER(?) ORDER BY COLUMN_ID";
+            } else {
+                // 使用 USER_TAB_COLUMNS 查询当前用户的表
+                sql = "SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, " +
+                      "DATA_DEFAULT, COLUMN_ID, COMMENTS FROM USER_TAB_COLUMNS " +
+                      "WHERE TABLE_NAME = UPPER(?) ORDER BY COLUMN_ID";
+            }
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                if (schemaName != null && !schemaName.trim().isEmpty()) {
+                    stmt.setString(1, schemaName.toUpperCase());
+                    stmt.setString(2, tableName.toUpperCase());
+                } else {
+                    stmt.setString(1, tableName.toUpperCase());
+                }
+                
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        ColumnInfo columnInfo = new ColumnInfo();
+                        columnInfo.setColumnName(rs.getString("COLUMN_NAME"));
+                        columnInfo.setDataType(rs.getString("DATA_TYPE"));
+                        columnInfo.setTypeName(rs.getString("DATA_TYPE"));
+                        columnInfo.setNullable("Y".equalsIgnoreCase(rs.getString("NULLABLE")));
+                        columnInfo.setDefaultValue(rs.getString("DATA_DEFAULT"));
+                        columnInfo.setRemarks(rs.getString("COMMENTS"));
+                        columnInfo.setOrdinalPosition(rs.getInt("COLUMN_ID"));
+                        
+                        // 设置长度和精度
+                        if (rs.getObject("DATA_LENGTH") != null) {
+                            columnInfo.setColumnSize(rs.getInt("DATA_LENGTH"));
+                        }
+                        
+                        if (rs.getObject("DATA_SCALE") != null) {
+                            columnInfo.setDecimalDigits(rs.getInt("DATA_SCALE"));
+                        }
+                        
+                        columns.add(columnInfo);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            // 如果达梦系统表查询也失败，抛出异常
+            throw new SQLException("达梦数据库列信息查询失败: " + e.getMessage(), e);
+        }
+        
+        return columns;
+    }
+    
+    /**
+     * 达梦数据库特定的表列表获取方法
+     */
+    private static List<String> getDamengTables(Connection connection, String schemaName) throws SQLException {
+        List<String> tables = new ArrayList<>();
+        
+        // 首先尝试使用 JDBC 元数据方法
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            try (ResultSet rs = metaData.getTables(null, schemaName, "%", new String[]{"TABLE"})) {
+                while (rs.next()) {
+                    tables.add(rs.getString("TABLE_NAME"));
+                }
+            }
+            
+            if (!tables.isEmpty()) {
+                return tables;
+            }
+        } catch (SQLException e) {
+            System.out.println("达梦数据库 JDBC 元数据表查询失败，尝试 SQL 查询: " + e.getMessage());
+        }
+        
+        // 备用方案：使用达梦系统表查询
+        String sql;
+        if (schemaName != null && !schemaName.trim().isEmpty()) {
+            sql = "SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = UPPER(?) ORDER BY TABLE_NAME";
+        } else {
+            sql = "SELECT TABLE_NAME FROM USER_TABLES ORDER BY TABLE_NAME";
+        }
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            if (schemaName != null && !schemaName.trim().isEmpty()) {
+                stmt.setString(1, schemaName.toUpperCase());
+            }
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    tables.add(rs.getString("TABLE_NAME"));
+                }
+            }
+        }
+        
+        return tables;
+    }
+    
+    /**
+     * 达梦数据库特定的基础表信息获取方法
+     */
+    private static List<BasicTableInfo> getDamengBasicTables(Connection connection, String schemaName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        
+        // 首先尝试使用 JDBC 元数据方法
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            try (ResultSet rs = metaData.getTables(null, schemaName, "%", new String[]{"TABLE", "VIEW"})) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("TABLE_NAME"));
+                    tableInfo.setTableType(rs.getString("TABLE_TYPE"));
+                    tableInfo.setRemarks(rs.getString("REMARKS"));
+                    tableInfo.setSchemaName(schemaName);
+                    tables.add(tableInfo);
+                }
+            }
+            
+            if (!tables.isEmpty()) {
+                return tables;
+            }
+        } catch (SQLException e) {
+            System.out.println("达梦数据库 JDBC 元数据基础表查询失败，尝试 SQL 查询: " + e.getMessage());
+        }
+        
+        // 备用方案：使用达梦系统表查询
+        String sql;
+        if (schemaName != null && !schemaName.trim().isEmpty()) {
+            sql = "SELECT t.TABLE_NAME, 'TABLE' as TABLE_TYPE, c.COMMENTS " +
+                  "FROM ALL_TABLES t " +
+                  "LEFT JOIN ALL_TAB_COMMENTS c ON t.OWNER = c.OWNER AND t.TABLE_NAME = c.TABLE_NAME " +
+                  "WHERE t.OWNER = UPPER(?) " +
+                  "ORDER BY t.TABLE_NAME";
+        } else {
+            sql = "SELECT t.TABLE_NAME, 'TABLE' as TABLE_TYPE, c.COMMENTS " +
+                  "FROM USER_TABLES t " +
+                  "LEFT JOIN USER_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME " +
+                  "ORDER BY t.TABLE_NAME";
+        }
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            if (schemaName != null && !schemaName.trim().isEmpty()) {
+                stmt.setString(1, schemaName.toUpperCase());
+            }
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("TABLE_NAME"));
+                    tableInfo.setTableType(rs.getString("TABLE_TYPE"));
+                    tableInfo.setRemarks(rs.getString("COMMENTS"));
+                    tableInfo.setSchemaName(schemaName);
+                    tables.add(tableInfo);
+                }
+            }
+        }
+        
+        return tables;
     }
 }

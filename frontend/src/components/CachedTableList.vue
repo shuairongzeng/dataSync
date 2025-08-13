@@ -305,7 +305,8 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElIcon, ElTag, ElText, ElTooltip, ElButton } from 'element-plus'
 import { Search, Refresh, Clock, Document, View, Close, Key, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { tableCacheManager, type TableInfo, type CacheMetadata } from '@/utils/TableCacheManager'
-import { getTablesWithPaginationApi, getTableColumnsApi, getBasicTablesApi, getBasicTablesWithPaginationApi, getTableDetailsApi, getBatchTableStatsApi } from '@/api/database'
+import { getTablesWithPaginationApi, getTableColumnsApi, getBasicTablesApi, getBasicTablesWithPaginationApi, getTableDetailsApi, getBatchTableStatsApi, getConnectionByIdApi } from '@/api/database'
+import { generateSelectQuery, generateInsertQuery, generateUpdateQuery, generateDeleteQuery, generateDescribeQuery, getPaginationSyntaxInfo } from '@/utils/SqlGenerator'
 
 // Props
 interface Props {
@@ -339,6 +340,10 @@ const loadingDetails = ref('')
 const showDetailedProgress = ref(false)
 const estimatedTotal = ref(0)
 const loadedCount = ref(0)
+
+// 数据库连接信息
+const connectionInfo = ref<any>(null)
+const dbType = ref('')
 
 // SQL 菜单相关状态
 const showSqlMenu = ref(false)
@@ -532,7 +537,7 @@ const handleSqlCommand = async (command: string, table: TableInfo) => {
         sql = `SELECT COUNT(*) FROM ${table.tableName};`
         break
       case 'describe':
-        sql = `DESC ${table.tableName};`
+        sql = await generateDescribeSql(table.tableName)
         break
       case 'insert':
         sql = await generateInsertSql(table.tableName)
@@ -541,8 +546,7 @@ const handleSqlCommand = async (command: string, table: TableInfo) => {
         sql = await generateUpdateSql(table.tableName)
         break
       case 'delete':
-        const pkColumn = await getPrimaryKeyColumn(table.tableName)
-        sql = `DELETE FROM ${table.tableName} WHERE ${pkColumn} = ?;`
+        sql = await generateDeleteSql(table.tableName)
         break
       default:
         throw new Error(`未知的 SQL 命令：${command}`)
@@ -1004,6 +1008,21 @@ const loadVisibleTableDetails = async () => {
   }
 }
 
+// 获取数据库连接信息
+const loadConnectionInfo = async () => {
+  try {
+    if (!connectionInfo.value) {
+      const result = await getConnectionByIdApi(props.connectionId)
+      connectionInfo.value = result
+      dbType.value = result.dbType || 'mysql'
+    }
+  } catch (error: any) {
+    console.warn('获取数据库连接信息失败：', error)
+    // 默认使用MySQL语法
+    dbType.value = 'mysql'
+  }
+}
+
 const refreshTables = async () => {
   refreshing.value = true
   try {
@@ -1038,40 +1057,95 @@ const handleSearch = () => {
 
 const generateSelectSql = async (tableName: string) => {
   try {
+    // 确保已加载数据库连接信息
+    await loadConnectionInfo()
+    
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
     // 如果字段数量较多，只选择前 10 个字段；否则使用所有字段
-    if (columns.length > 10) {
-      const columnNames = columns.slice(0, 10).map((col: any) => col.columnName).join(', ')
-      return `SELECT ${columnNames} FROM ${tableName} LIMIT 100;`
-    } else {
-      const columnNames = columns.map((col: any) => col.columnName).join(', ')
-      return `SELECT ${columnNames} FROM ${tableName} LIMIT 100;`
-    }
+    const columnNames = columns.length > 10 
+      ? columns.slice(0, 10).map((col: any) => col.columnName)
+      : columns.map((col: any) => col.columnName)
+      
+    return generateSelectQuery(dbType.value, tableName, columnNames, props.schema)
   } catch (error) {
-    return `SELECT * FROM ${tableName} LIMIT 100;`
+    // 确保有默认的数据库类型
+    await loadConnectionInfo()
+    return generateSelectQuery(dbType.value, tableName, [], props.schema)
   }
 }
 
 const generateInsertSql = async (tableName: string) => {
   try {
+    // 确保已加载数据库连接信息
+    await loadConnectionInfo()
+    
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const columnNames = columns.filter((col: any) => !col.isAutoIncrement).map((col: any) => col.columnName)
-    const values = columnNames.map(() => '?').join(', ')
-    return `INSERT INTO ${tableName} (${columnNames.join(', ')}) VALUES (${values});`
+    // 过滤掉自增字段，构建列信息
+    const insertColumns = columns
+      .filter((col: any) => !col.isAutoIncrement)
+      .map((col: any) => ({
+        columnName: col.columnName,
+        dataType: col.dataType || 'VARCHAR',
+        nullable: col.nullable !== false
+      }))
+      
+    return generateInsertQuery(dbType.value, tableName, insertColumns, props.schema)
   } catch (error) {
-    return `INSERT INTO ${tableName} () VALUES ();`
+    await loadConnectionInfo()
+    return generateInsertQuery(dbType.value, tableName, [], props.schema)
   }
 }
 
 const generateUpdateSql = async (tableName: string) => {
   try {
+    // 确保已加载数据库连接信息
+    await loadConnectionInfo()
+    
     const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
-    const updateColumns = columns.filter((col: any) => !col.isPrimaryKey && !col.isAutoIncrement)
-      .slice(0, 3).map((col: any) => `${col.columnName} = ?`).join(', ')
-    const pkColumn = columns.find((col: any) => col.isPrimaryKey)?.columnName || 'id'
-    return `UPDATE ${tableName} SET ${updateColumns} WHERE ${pkColumn} = ?;`
+    // 构建列信息，包含主键标识
+    const updateColumns = columns.map((col: any) => ({
+      columnName: col.columnName,
+      dataType: col.dataType || 'VARCHAR',
+      isPrimaryKey: col.isPrimaryKey === true
+    }))
+      
+    return generateUpdateQuery(dbType.value, tableName, updateColumns, props.schema)
   } catch (error) {
-    return `UPDATE ${tableName} SET  WHERE ;`
+    await loadConnectionInfo()
+    return generateUpdateQuery(dbType.value, tableName, [], props.schema)
+  }
+}
+
+const generateDeleteSql = async (tableName: string) => {
+  try {
+    // 确保已加载数据库连接信息
+    await loadConnectionInfo()
+    
+    const columns = await getTableColumnsApi(props.connectionId, tableName, props.schema)
+    // 获取主键字段
+    const primaryKeys = columns
+      .filter((col: any) => col.isPrimaryKey === true)
+      .map((col: any) => ({
+        columnName: col.columnName,
+        dataType: col.dataType || 'VARCHAR'
+      }))
+      
+    return generateDeleteQuery(dbType.value, tableName, primaryKeys, props.schema)
+  } catch (error) {
+    await loadConnectionInfo()
+    return generateDeleteQuery(dbType.value, tableName, [], props.schema)
+  }
+}
+
+const generateDescribeSql = async (tableName: string) => {
+  try {
+    // 确保已加载数据库连接信息
+    await loadConnectionInfo()
+    
+    return generateDescribeQuery(dbType.value, tableName, props.schema)
+  } catch (error) {
+    await loadConnectionInfo()
+    return generateDescribeQuery(dbType.value, tableName, props.schema)
   }
 }
 
@@ -1131,6 +1205,7 @@ const handleGlobalClick = (e: MouseEvent) => {
 // 生命周期
 onMounted(() => {
   if (props.connectionId) {
+    loadConnectionInfo() // 先加载连接信息
     loadTables(true)
   }
   

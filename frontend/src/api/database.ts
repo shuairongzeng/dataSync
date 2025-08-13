@@ -262,6 +262,11 @@ export const getConnectionsApi = () => {
   return http.request<DbConfig[]>("get", "/api/database/connections");
 };
 
+/** 根据ID获取单个数据库连接信息 */
+export const getConnectionByIdApi = (connectionId: string) => {
+  return http.request<DbConfig>("get", `/api/database/connections/${connectionId}`);
+};
+
 /** 检查数据库连接健康状态 */
 export const checkConnectionHealthApi = (connectionId: string) => {
   return http.request<{healthy: boolean, message: string, timestamp: number}>(
