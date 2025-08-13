@@ -2,8 +2,10 @@ package com.dbsync.dbsync.util;
 
 import com.dbsync.dbsync.entity.ColumnInfo;
 import com.dbsync.dbsync.entity.TableInfo;
+import com.dbsync.dbsync.entity.BasicTableInfo;
 import com.dbsync.dbsync.dto.TablePageRequest;
 import com.dbsync.dbsync.dto.TablePageResponse;
+import com.dbsync.dbsync.config.DatabaseOptimizationConfig;
 
 import java.sql.*;
 import java.util.ArrayList;
@@ -23,7 +25,19 @@ public class DatabaseMetadataUtil {
     public static TablePageResponse<TableInfo> getTablesWithPagination(Connection connection, String dbType,
                                                                        String schemaName, String databaseName,
                                                                        TablePageRequest request) throws SQLException {
-        List<TableInfo> allTables = getAllTableInfo(connection, dbType, schemaName, databaseName);
+        return getTablesWithPagination(connection, dbType, schemaName, databaseName, request, null);
+    }
+
+    /**
+     * 分页获取表信息列表（支持自定义超时配置）- 优化版本，支持数据库级分页
+     */
+    public static TablePageResponse<TableInfo> getTablesWithPagination(Connection connection, String dbType,
+                                                                       String schemaName, String databaseName,
+                                                                       TablePageRequest request, 
+                                                                       DatabaseOptimizationConfig config) throws SQLException {
+        
+        // 暂时使用内存分页（后续可以添加数据库级分页支持）
+        List<TableInfo> allTables = getAllTableInfo(connection, dbType, schemaName, databaseName, config);
 
         // 应用搜索过滤
         List<TableInfo> filteredTables = filterTables(allTables, request.getSearch());
@@ -94,8 +108,8 @@ public class DatabaseMetadataUtil {
 
         String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            // 设置查询超时时间（45秒）
-            stmt.setQueryTimeout(45);
+            // 设置查询超时时间（120秒）
+            stmt.setQueryTimeout(120);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -165,8 +179,8 @@ public class DatabaseMetadataUtil {
 
         String sql = "SELECT tablename FROM pg_tables WHERE schemaname = ? ORDER BY tablename";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            // 设置查询超时时间（45秒）
-            stmt.setQueryTimeout(45);
+            // 设置查询超时时间（120秒）
+            stmt.setQueryTimeout(120);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -241,8 +255,8 @@ public class DatabaseMetadataUtil {
         }
         
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            // 设置查询超时时间（45秒）
-            stmt.setQueryTimeout(45);
+            // 设置查询超时时间（120秒）
+            stmt.setQueryTimeout(120);
             if (schemaName != null && !schemaName.trim().isEmpty()) {
                 stmt.setString(1, schemaName.toUpperCase());
             }
@@ -326,8 +340,8 @@ public class DatabaseMetadataUtil {
 
         String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-            // 设置查询超时时间（45秒）
-            stmt.setQueryTimeout(45);
+            // 设置查询超时时间（120秒）
+            stmt.setQueryTimeout(120);
             stmt.setString(1, schema);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
@@ -418,6 +432,15 @@ public class DatabaseMetadataUtil {
      */
     private static List<TableInfo> getAllTableInfo(Connection connection, String dbType,
                                                    String schemaName, String databaseName) throws SQLException {
+        return getAllTableInfo(connection, dbType, schemaName, databaseName, null);
+    }
+
+    /**
+     * 获取所有表信息（包含详细信息，支持自定义超时配置）
+     */
+    private static List<TableInfo> getAllTableInfo(Connection connection, String dbType,
+                                                   String schemaName, String databaseName, 
+                                                   DatabaseOptimizationConfig config) throws SQLException {
         List<TableInfo> tableInfos = new ArrayList<>();
         DatabaseMetaData metaData = connection.getMetaData();
 
@@ -606,5 +629,249 @@ public class DatabaseMetadataUtil {
             default:
                 return null;
         }
+    }
+
+    // ================ 快速查询方法 - 只获取基础表信息 ================
+    
+    /**
+     * 快速获取基础表信息列表（只查表名和备注，不查询详细信息）
+     * 用于大量表的快速加载场景
+     */
+    public static List<BasicTableInfo> getBasicTablesInfo(Connection connection, String dbType, 
+                                                         String schemaName, String databaseName) throws SQLException {
+        switch (dbType.toLowerCase()) {
+            case "mysql":
+                return getMySQLBasicTables(connection, schemaName, databaseName);
+            case "postgresql":
+            case "vastbase":
+                return getPostgreSQLBasicTables(connection, schemaName);
+            case "oracle":
+            case "dameng":
+                return getOracleBasicTables(connection, schemaName);
+            case "sqlserver":
+                return getSQLServerBasicTables(connection, schemaName);
+            default:
+                return getGenericBasicTables(connection, schemaName, databaseName);
+        }
+    }
+
+    /**
+     * 快速分页获取基础表信息
+     */
+    public static TablePageResponse<BasicTableInfo> getBasicTablesWithPagination(Connection connection, String dbType,
+                                                                                 String schemaName, String databaseName,
+                                                                                 TablePageRequest request) throws SQLException {
+        List<BasicTableInfo> allTables = getBasicTablesInfo(connection, dbType, schemaName, databaseName);
+
+        // 应用搜索过滤
+        List<BasicTableInfo> filteredTables = filterBasicTables(allTables, request.getSearch());
+
+        // 应用排序
+        sortBasicTables(filteredTables, request.getSortBy(), request.getSortOrder());
+
+        // 应用分页
+        long total = filteredTables.size();
+        int offset = request.getOffset();
+        int limit = request.getLimit();
+
+        List<BasicTableInfo> pagedTables = new ArrayList<>();
+        if (offset < filteredTables.size()) {
+            int endIndex = Math.min(offset + limit, filteredTables.size());
+            pagedTables = filteredTables.subList(offset, endIndex);
+        }
+
+        return TablePageResponse.of(pagedTables, request.getPage(), request.getSize(), total, request.getSearch());
+    }
+
+    // MySQL快速查询实现
+    private static List<BasicTableInfo> getMySQLBasicTables(Connection connection, String schemaName, String databaseName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : databaseName;
+
+        String sql = "SELECT table_name, table_type, table_comment " +
+                    "FROM information_schema.tables " +
+                    "WHERE table_schema = ? AND table_type = 'BASE TABLE' " +
+                    "ORDER BY table_name";
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setQueryTimeout(30); // 快速查询，30秒超时
+            stmt.setString(1, schema);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("table_name"));
+                    tableInfo.setTableType(rs.getString("table_type"));
+                    tableInfo.setRemarks(rs.getString("table_comment"));
+                    tableInfo.setSchemaName(schema);
+                    tables.add(tableInfo);
+                }
+            }
+        }
+        return tables;
+    }
+
+    // PostgreSQL快速查询实现
+    private static List<BasicTableInfo> getPostgreSQLBasicTables(Connection connection, String schemaName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : "public";
+
+        String sql = "SELECT t.tablename, 'BASE TABLE' as table_type, " +
+                    "COALESCE(obj_description(c.oid), '') as table_comment " +
+                    "FROM pg_tables t " +
+                    "LEFT JOIN pg_class c ON c.relname = t.tablename " +
+                    "LEFT JOIN pg_namespace n ON n.oid = c.relnamespace " +
+                    "WHERE t.schemaname = ? AND (n.nspname = ? OR n.nspname IS NULL) " +
+                    "ORDER BY t.tablename";
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setQueryTimeout(30);
+            stmt.setString(1, schema);
+            stmt.setString(2, schema);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("tablename"));
+                    tableInfo.setTableType(rs.getString("table_type"));
+                    tableInfo.setRemarks(rs.getString("table_comment"));
+                    tableInfo.setSchemaName(schema);
+                    tables.add(tableInfo);
+                }
+            }
+        }
+        return tables;
+    }
+
+    // Oracle快速查询实现
+    private static List<BasicTableInfo> getOracleBasicTables(Connection connection, String schemaName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        
+        String sql;
+        if (schemaName != null && !schemaName.trim().isEmpty()) {
+            sql = "SELECT t.table_name, 'BASE TABLE' as table_type, " +
+                  "COALESCE(c.comments, '') as table_comment " +
+                  "FROM all_tables t " +
+                  "LEFT JOIN all_tab_comments c ON t.owner = c.owner AND t.table_name = c.table_name " +
+                  "WHERE t.owner = UPPER(?) " +
+                  "ORDER BY t.table_name";
+        } else {
+            sql = "SELECT t.table_name, 'BASE TABLE' as table_type, " +
+                  "COALESCE(c.comments, '') as table_comment " +
+                  "FROM user_tables t " +
+                  "LEFT JOIN user_tab_comments c ON t.table_name = c.table_name " +
+                  "ORDER BY t.table_name";
+        }
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setQueryTimeout(30);
+            if (schemaName != null && !schemaName.trim().isEmpty()) {
+                stmt.setString(1, schemaName.toUpperCase());
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("table_name"));
+                    tableInfo.setTableType(rs.getString("table_type"));
+                    tableInfo.setRemarks(rs.getString("table_comment"));
+                    tableInfo.setSchemaName(schemaName);
+                    tables.add(tableInfo);
+                }
+            }
+        }
+        return tables;
+    }
+
+    // SQL Server快速查询实现
+    private static List<BasicTableInfo> getSQLServerBasicTables(Connection connection, String schemaName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        String schema = (schemaName != null && !schemaName.trim().isEmpty()) ? schemaName : "dbo";
+
+        String sql = "SELECT t.table_name, t.table_type, " +
+                    "COALESCE(ep.value, '') as table_comment " +
+                    "FROM information_schema.tables t " +
+                    "LEFT JOIN sys.tables st ON st.name = t.table_name " +
+                    "LEFT JOIN sys.extended_properties ep ON ep.major_id = st.object_id AND ep.minor_id = 0 AND ep.name = 'MS_Description' " +
+                    "WHERE t.table_schema = ? AND t.table_type = 'BASE TABLE' " +
+                    "ORDER BY t.table_name";
+        
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setQueryTimeout(30);
+            stmt.setString(1, schema);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    BasicTableInfo tableInfo = new BasicTableInfo();
+                    tableInfo.setTableName(rs.getString("table_name"));
+                    tableInfo.setTableType(rs.getString("table_type"));
+                    tableInfo.setRemarks(rs.getString("table_comment"));
+                    tableInfo.setSchemaName(schema);
+                    tables.add(tableInfo);
+                }
+            }
+        }
+        return tables;
+    }
+
+    // 通用快速查询实现（JDBC元数据）
+    private static List<BasicTableInfo> getGenericBasicTables(Connection connection, String schemaName, String databaseName) throws SQLException {
+        List<BasicTableInfo> tables = new ArrayList<>();
+        DatabaseMetaData metaData = connection.getMetaData();
+        
+        try (ResultSet rs = metaData.getTables(databaseName, schemaName, "%", new String[]{"TABLE"})) {
+            while (rs.next()) {
+                BasicTableInfo tableInfo = new BasicTableInfo();
+                tableInfo.setTableName(rs.getString("TABLE_NAME"));
+                tableInfo.setTableType(rs.getString("TABLE_TYPE"));
+                tableInfo.setRemarks(rs.getString("REMARKS"));
+                tableInfo.setSchemaName(rs.getString("TABLE_SCHEM"));
+                tableInfo.setCatalogName(rs.getString("TABLE_CAT"));
+                tables.add(tableInfo);
+            }
+        }
+        return tables;
+    }
+
+    // 基础表信息过滤
+    private static List<BasicTableInfo> filterBasicTables(List<BasicTableInfo> tables, String search) {
+        if (search == null || search.trim().isEmpty()) {
+            return tables;
+        }
+
+        String searchLower = search.toLowerCase();
+        List<BasicTableInfo> filtered = new ArrayList<>();
+
+        for (BasicTableInfo table : tables) {
+            if (table.getTableName().toLowerCase().contains(searchLower) ||
+                (table.getRemarks() != null && table.getRemarks().toLowerCase().contains(searchLower))) {
+                filtered.add(table);
+            }
+        }
+
+        return filtered;
+    }
+
+    // 基础表信息排序
+    private static void sortBasicTables(List<BasicTableInfo> tables, String sortBy, String sortOrder) {
+        boolean ascending = "asc".equalsIgnoreCase(sortOrder);
+
+        tables.sort((t1, t2) -> {
+            int result = 0;
+
+            switch (sortBy.toLowerCase()) {
+                case "name":
+                case "tablename":
+                    result = t1.getTableName().compareToIgnoreCase(t2.getTableName());
+                    break;
+                case "type":
+                case "tabletype":
+                    String type1 = t1.getTableType() != null ? t1.getTableType() : "";
+                    String type2 = t2.getTableType() != null ? t2.getTableType() : "";
+                    result = type1.compareToIgnoreCase(type2);
+                    break;
+                default:
+                    result = t1.getTableName().compareToIgnoreCase(t2.getTableName());
+                    break;
+            }
+
+            return ascending ? result : -result;
+        });
     }
 }

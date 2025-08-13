@@ -3,6 +3,7 @@ package com.dbsync.dbsync.service;
 import com.dbsync.dbsync.config.CacheConfig;
 import com.dbsync.dbsync.entity.ColumnInfo;
 import com.dbsync.dbsync.entity.TableInfo;
+import com.dbsync.dbsync.entity.BasicTableInfo;
 import com.dbsync.dbsync.dto.TablePageRequest;
 import com.dbsync.dbsync.dto.TablePageResponse;
 import org.slf4j.Logger;
@@ -69,11 +70,33 @@ public class DatabaseMetadataCacheService {
         return dbConnectionService.getSchemas(connectionId);
     }
 
+    // ================ 基础表信息缓存方法 ================
+
+    /**
+     * 获取基础表信息列表（带缓存）- 快速加载
+     */
+    @Cacheable(value = CacheConfig.BASIC_TABLES_CACHE, key = "#connectionId + '_' + (#schema != null ? #schema : 'default')")
+    public List<BasicTableInfo> getBasicTablesInfo(Long connectionId, String schema) {
+        logger.info("从数据库获取基础表信息列表，连接ID: {}, Schema: {}", connectionId, schema);
+        return dbConnectionService.getBasicTablesInfo(connectionId, schema);
+    }
+
+    /**
+     * 获取基础表信息列表（分页，带缓存）- 快速加载
+     */
+    @Cacheable(value = CacheConfig.BASIC_TABLE_METADATA_CACHE, 
+               key = "#connectionId + '_' + (#request.schema != null ? #request.schema : 'default') + '_page_' + #request.page + '_' + #request.size + '_' + (#request.search != null ? #request.search : '') + '_' + #request.sortBy + '_' + #request.sortOrder")
+    public TablePageResponse<BasicTableInfo> getBasicTablesWithPagination(Long connectionId, TablePageRequest request) {
+        logger.info("从数据库获取基础表信息分页列表，连接ID: {}, 页码: {}, 大小: {}", connectionId, request.getPage(), request.getSize());
+        return dbConnectionService.getBasicTablesWithPagination(connectionId, request);
+    }
+
     /**
      * 清除指定连接的所有缓存
      */
     @CacheEvict(value = {CacheConfig.DB_TABLES_CACHE, CacheConfig.TABLE_COLUMNS_CACHE, 
-                         CacheConfig.DB_SCHEMAS_CACHE, CacheConfig.TABLE_METADATA_CACHE}, 
+                         CacheConfig.DB_SCHEMAS_CACHE, CacheConfig.TABLE_METADATA_CACHE,
+                         CacheConfig.BASIC_TABLES_CACHE, CacheConfig.BASIC_TABLE_METADATA_CACHE}, 
                 key = "#connectionId + '*'", allEntries = false)
     public void evictConnectionCache(Long connectionId) {
         logger.info("清除连接缓存，连接ID: {}", connectionId);
@@ -83,6 +106,8 @@ public class DatabaseMetadataCacheService {
         evictCacheByPattern(CacheConfig.TABLE_COLUMNS_CACHE, connectionId.toString());
         evictCacheByPattern(CacheConfig.DB_SCHEMAS_CACHE, connectionId.toString());
         evictCacheByPattern(CacheConfig.TABLE_METADATA_CACHE, connectionId.toString());
+        evictCacheByPattern(CacheConfig.BASIC_TABLES_CACHE, connectionId.toString());
+        evictCacheByPattern(CacheConfig.BASIC_TABLE_METADATA_CACHE, connectionId.toString());
     }
 
     /**
@@ -102,7 +127,8 @@ public class DatabaseMetadataCacheService {
      * 清除所有缓存
      */
     @CacheEvict(value = {CacheConfig.DB_TABLES_CACHE, CacheConfig.TABLE_COLUMNS_CACHE, 
-                         CacheConfig.DB_SCHEMAS_CACHE, CacheConfig.TABLE_METADATA_CACHE}, 
+                         CacheConfig.DB_SCHEMAS_CACHE, CacheConfig.TABLE_METADATA_CACHE,
+                         CacheConfig.BASIC_TABLES_CACHE, CacheConfig.BASIC_TABLE_METADATA_CACHE}, 
                 allEntries = true)
     public void evictAllCache() {
         logger.info("清除所有数据库元数据缓存");
@@ -133,7 +159,9 @@ public class DatabaseMetadataCacheService {
             CacheConfig.DB_TABLES_CACHE,
             CacheConfig.TABLE_COLUMNS_CACHE,
             CacheConfig.DB_SCHEMAS_CACHE,
-            CacheConfig.TABLE_METADATA_CACHE
+            CacheConfig.TABLE_METADATA_CACHE,
+            CacheConfig.BASIC_TABLES_CACHE,
+            CacheConfig.BASIC_TABLE_METADATA_CACHE
         )) {
             Cache cache = cacheManager.getCache(cacheName);
             if (cache != null && cache.getNativeCache() instanceof com.github.benmanes.caffeine.cache.Cache) {

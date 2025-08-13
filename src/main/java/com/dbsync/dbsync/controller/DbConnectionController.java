@@ -4,6 +4,7 @@ import com.dbsync.dbsync.entity.ColumnInfo;
 import com.dbsync.dbsync.entity.QueryHistory;
 import com.dbsync.dbsync.entity.QueryResult;
 import com.dbsync.dbsync.entity.TableInfo;
+import com.dbsync.dbsync.entity.BasicTableInfo;
 import com.dbsync.dbsync.dto.TablePageRequest;
 import com.dbsync.dbsync.dto.TablePageResponse;
 import com.dbsync.dbsync.model.DbConnection;
@@ -350,6 +351,156 @@ public class DbConnectionController {
 
         public void setSql(String sql) {
             this.sql = sql;
+        }
+
+        public String getSchema() {
+            return schema;
+        }
+
+        public void setSchema(String schema) {
+            this.schema = schema;
+        }
+    }
+
+    // ================ 新增快速加载API端点 ================
+
+    /**
+     * 快速获取基础表信息列表（不含详细信息，用于快速加载）
+     */
+    @GetMapping("/connections/{id}/tables/basic")
+    public ResponseEntity<?> getBasicTables(@PathVariable Long id, 
+                                           @RequestParam(required = false) String schema) {
+        try {
+            List<BasicTableInfo> tables = cacheService.getBasicTablesInfo(id, schema);
+            return ResponseEntity.ok(tables);
+        } catch (Exception e) {
+            logger.error("获取基础表信息失败", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "获取基础表信息失败");
+            error.put("message", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    /**
+     * 快速分页获取基础表信息列表
+     */
+    @GetMapping("/connections/{id}/tables/basic/page")
+    public ResponseEntity<?> getBasicTablesWithPagination(@PathVariable Long id,
+                                                         @RequestParam(defaultValue = "1") Integer page,
+                                                         @RequestParam(defaultValue = "50") Integer size,
+                                                         @RequestParam(required = false) String search,
+                                                         @RequestParam(defaultValue = "name") String sortBy,
+                                                         @RequestParam(defaultValue = "asc") String sortOrder,
+                                                         @RequestParam(required = false) String schema) {
+        try {
+            TablePageRequest request = new TablePageRequest();
+            request.setPage(page);
+            request.setSize(size);
+            request.setSearch(search);
+            request.setSortBy(sortBy);
+            request.setSortOrder(sortOrder);
+            request.setSchema(schema);
+
+            TablePageResponse<BasicTableInfo> response = cacheService.getBasicTablesWithPagination(id, request);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("获取基础表信息分页列表失败", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "获取基础表信息分页列表失败");
+            error.put("message", e.getMessage());
+            return ResponseEntity.status(500).body(error);
+        }
+    }
+
+    /**
+     * 获取单个表的详细信息（按需加载）
+     */
+    @GetMapping("/connections/{id}/tables/{tableName}/details")
+    public ResponseEntity<?> getTableDetails(@PathVariable Long id,
+                                           @PathVariable String tableName,
+                                           @RequestParam(required = false) String schema) {
+        try {
+            // 获取表的列信息
+            List<ColumnInfo> columns = cacheService.getTableColumns(id, tableName, schema);
+            
+            // 构建详细信息响应
+            Map<String, Object> details = new HashMap<>();
+            details.put("tableName", tableName);
+            details.put("schemaName", schema);
+            details.put("columnCount", columns.size());
+            details.put("columns", columns);
+            
+            // 检查是否有主键
+            boolean hasPrimaryKey = columns.stream().anyMatch(ColumnInfo::getIsPrimaryKey);
+            details.put("hasPrimaryKey", hasPrimaryKey);
+            
+            if (hasPrimaryKey) {
+                List<String> primaryKeys = columns.stream()
+                    .filter(ColumnInfo::getIsPrimaryKey)
+                    .map(ColumnInfo::getColumnName)
+                    .collect(java.util.stream.Collectors.toList());
+                details.put("primaryKeys", primaryKeys);
+            }
+            
+            return ResponseEntity.ok(details);
+        } catch (Exception e) {
+            logger.error("获取表详细信息失败: {}", e.getMessage(), e);
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "获取表详细信息失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * 批量获取多个表的基础统计信息
+     */
+    @PostMapping("/connections/{id}/tables/batch-stats")
+    public ResponseEntity<?> getBatchTableStats(@PathVariable Long id,
+                                               @RequestBody BatchTableStatsRequest request) {
+        try {
+            Map<String, Object> stats = new HashMap<>();
+            
+            for (String tableName : request.getTableNames()) {
+                try {
+                    List<ColumnInfo> columns = cacheService.getTableColumns(id, tableName, request.getSchema());
+                    
+                    Map<String, Object> tableStats = new HashMap<>();
+                    tableStats.put("columnCount", columns.size());
+                    tableStats.put("hasPrimaryKey", columns.stream().anyMatch(ColumnInfo::getIsPrimaryKey));
+                    
+                    stats.put(tableName, tableStats);
+                } catch (Exception e) {
+                    // 如果单个表查询失败，记录错误但继续处理其他表
+                    logger.warn("获取表 {} 的统计信息失败: {}", tableName, e.getMessage());
+                    Map<String, Object> errorStats = new HashMap<>();
+                    errorStats.put("error", e.getMessage());
+                    stats.put(tableName, errorStats);
+                }
+            }
+            
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            logger.error("批量获取表统计信息失败", e);
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "批量获取表统计信息失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * 批量表统计请求类
+     */
+    public static class BatchTableStatsRequest {
+        private List<String> tableNames;
+        private String schema;
+
+        public List<String> getTableNames() {
+            return tableNames;
+        }
+
+        public void setTableNames(List<String> tableNames) {
+            this.tableNames = tableNames;
         }
 
         public String getSchema() {

@@ -2,6 +2,7 @@ package com.dbsync.dbsync.service;
 
 import com.dbsync.dbsync.entity.ColumnInfo;
 import com.dbsync.dbsync.entity.TableInfo;
+import com.dbsync.dbsync.entity.BasicTableInfo;
 import com.dbsync.dbsync.dto.TablePageRequest;
 import com.dbsync.dbsync.dto.TablePageResponse;
 import com.dbsync.dbsync.mapper.auth.DbConnectionMapper;
@@ -374,6 +375,48 @@ public class DbConnectionService {
 
         public void setConnectionTime(long connectionTime) {
             this.connectionTime = connectionTime;
+        }
+    }
+
+    // ================ 基础表信息快速查询方法 ================
+
+    /**
+     * 获取基础表信息列表（快速加载）
+     */
+    public List<BasicTableInfo> getBasicTablesInfo(Long connectionId, String schema) {
+        DbConnection dbConnection = dbConnectionMapper.findById(connectionId);
+        if (dbConnection == null) {
+            throw new RuntimeException("数据库连接不存在");
+        }
+        
+        String url = buildJdbcUrl(dbConnection);
+        
+        try (Connection connection = createConnectionWithTimeout(url, dbConnection.getUsername(), dbConnection.getPassword())) {
+            return com.dbsync.dbsync.util.DatabaseMetadataUtil.getBasicTablesInfo(
+                connection, dbConnection.getDbType(), schema, dbConnection.getDatabase());
+        } catch (SQLException e) {
+            logger.error("获取基础表信息失败", e);
+            throw new RuntimeException("获取基础表信息失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 获取基础表信息列表（分页，快速加载）
+     */
+    public TablePageResponse<BasicTableInfo> getBasicTablesWithPagination(Long connectionId, TablePageRequest request) {
+        DbConnection dbConnection = dbConnectionMapper.findById(connectionId);
+        if (dbConnection == null) {
+            throw new RuntimeException("数据库连接不存在");
+        }
+        
+        String url = buildJdbcUrl(dbConnection);
+        
+        try (Connection connection = createConnectionWithTimeout(url, dbConnection.getUsername(), dbConnection.getPassword())) {
+            return com.dbsync.dbsync.util.DatabaseMetadataUtil.getBasicTablesWithPagination(
+                connection, dbConnection.getDbType(), request.getSchema(), dbConnection.getDatabase(), request);
+        } catch (SQLException e) {
+            logger.error("获取基础表信息分页数据失败", e);
+            throw new RuntimeException("获取基础表信息分页数据失败: " + e.getMessage());
         }
     }
 }

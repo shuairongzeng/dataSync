@@ -2,6 +2,7 @@ package com.dbsync.dbsync.service;
 
 import com.dbsync.dbsync.model.DbConnection;
 import com.dbsync.dbsync.entity.QueryResult;
+import com.dbsync.dbsync.entity.EnhancedQueryResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 查询执行服务类
@@ -24,6 +26,7 @@ public class QueryService {
 
     @Autowired
     private DatabaseMetadataCacheService cacheService;
+    
     
     /**
      * 执行SQL查询
@@ -307,4 +310,5 @@ public class QueryService {
             this.remarks = remarks;
         }
     }
+    
 }

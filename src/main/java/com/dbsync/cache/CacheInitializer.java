@@ -35,8 +35,8 @@ public class CacheInitializer implements CommandLineRunner {
 
             // For debugging: Read and print the SQL content
             String sqlContent = StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-            System.out.println("Executing SQL script:");
-            System.out.println(sqlContent);
+//            System.out.println("Executing SQL script:");
+//            System.out.println(sqlContent);
 
             // Use ResourceDatabasePopulator for more control over script execution
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator(resource);

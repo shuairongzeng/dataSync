@@ -2,7 +2,10 @@ package com.dbsync.dbsync.controller;
 
 import com.dbsync.dbsync.entity.QueryHistory;
 import com.dbsync.dbsync.entity.QueryResult;
+import com.dbsync.dbsync.entity.EnhancedQueryResult;
 import com.dbsync.dbsync.service.EnhancedQueryService;
+import com.dbsync.dbsync.service.QueryService;
+import com.dbsync.dbsync.service.FieldMappingService;
 import com.dbsync.dbsync.service.QueryHistoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +35,12 @@ public class EnhancedQueryController {
     private EnhancedQueryService enhancedQueryService;
     
     @Autowired
+    private QueryService queryService;
+    
+    @Autowired
+    private FieldMappingService fieldMappingService;
+    
+    @Autowired
     private QueryHistoryService queryHistoryService;
     
     /**
@@ -47,8 +56,11 @@ public class EnhancedQueryController {
                 return ResponseEntity.badRequest().body(error);
             }
             
-            // Execute query with caching and pagination
-            QueryResult result = enhancedQueryService.executeQuery(
+            // Execute query with Chinese column names support
+            EnhancedQueryResult result;
+            
+            // 首先执行原始查询
+            QueryResult originalResult = enhancedQueryService.executeQuery(
                 request.getConnectionId(), 
                 request.getSql(), 
                 request.getSchema(),
@@ -56,6 +68,34 @@ public class EnhancedQueryController {
                 request.getPage(),
                 request.getPageSize()
             );
+            
+            // 创建增强结果
+            result = new EnhancedQueryResult(originalResult);
+            
+            // 尝试添加中文字段名
+            try {
+                if (originalResult.getColumns() != null && !originalResult.getColumns().isEmpty()) {
+                    Map<String, String> displayNames = fieldMappingService.getQueryFieldDisplayNames(
+                        request.getConnectionId(), 
+                        request.getSql(), 
+                        request.getSchema(), 
+                        originalResult.getColumns());
+                    
+                    // 设置字段显示名称
+                    result.setFieldDisplayNames(displayNames);
+                    
+                    logger.info("成功为 {} 个字段设置了中文显示名称，总字段数: {}", 
+                               displayNames.size(), originalResult.getColumns().size());
+                    
+                    // 记录中文字段覆盖率
+                    double coverage = result.getChineseColumnCoverage();
+                    logger.debug("中文字段覆盖率: {:.2f}%", coverage * 100);
+                }
+            } catch (Exception e) {
+                logger.error("设置字段中文名称失败: {}", e.getMessage(), e);
+                // 失败时禁用中文列名功能，不影响查询功能
+                result.setEnableChineseColumnNames(false);
+            }
             
             // Save to query history if requested
             if (request.isSaveHistory()) {
@@ -144,15 +184,24 @@ public class EnhancedQueryController {
     }
     
     /**
-     * Clear cache for specific connection
+     * Clear cache for specific connection (including field mapping cache)
      */
     @DeleteMapping("/cache/{connectionId}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<?> clearConnectionCache(@PathVariable Long connectionId) {
         try {
+            // 清除原有缓存
             enhancedQueryService.clearConnectionCache(connectionId);
+            
+            // 清除字段映射缓存
+            try {
+                fieldMappingService.clearConnectionCache(connectionId);
+            } catch (Exception e) {
+                logger.warn("字段映射缓存清除失败: {}", e.getMessage());
+            }
+            
             Map<String, String> response = new HashMap<>();
-            response.put("message", "缓存已清除");
+            response.put("message", "缓存已清除（包括字段映射缓存）");
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("Failed to clear cache: {}", e.getMessage(), e);
@@ -163,16 +212,25 @@ public class EnhancedQueryController {
     }
     
     /**
-     * Warmup cache for connection
+     * Warmup cache for connection (including field mapping cache)
      */
     @PostMapping("/cache/warmup/{connectionId}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<?> warmupCache(@PathVariable Long connectionId,
                                        @RequestParam(required = false) String schema) {
         try {
+            // 原有缓存预热
             enhancedQueryService.warmupCache(connectionId, schema);
+            
+            // 字段映射缓存预热
+            try {
+                fieldMappingService.warmupConnectionCache(connectionId, schema);
+            } catch (Exception e) {
+                logger.warn("字段映射缓存预热失败: {}", e.getMessage());
+            }
+            
             Map<String, String> response = new HashMap<>();
-            response.put("message", "缓存预热完成");
+            response.put("message", "缓存预热完成（包括字段映射缓存）");
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("Failed to warmup cache: {}", e.getMessage(), e);
@@ -209,5 +267,46 @@ public class EnhancedQueryController {
         public void setPage(Integer page) { this.page = page; }
         public Integer getPageSize() { return pageSize; }
         public void setPageSize(Integer pageSize) { this.pageSize = pageSize; }
+    }
+    
+    /**
+     * 清除字段映射缓存
+     */
+    @PostMapping("/clear-field-mapping-cache")
+    public ResponseEntity<?> clearFieldMappingCache(@RequestBody Map<String, Object> request) {
+        try {
+            Long connectionId = ((Number) request.get("connectionId")).longValue();
+            fieldMappingService.clearConnectionCache(connectionId);
+            
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "字段映射缓存已清除");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("清除字段映射缓存失败: {}", e.getMessage(), e);
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "清除缓存失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+    
+    /**
+     * 预热字段映射缓存
+     */
+    @PostMapping("/warmup-field-mapping-cache")
+    public ResponseEntity<?> warmupFieldMappingCache(@RequestBody Map<String, Object> request) {
+        try {
+            Long connectionId = ((Number) request.get("connectionId")).longValue();
+            String schema = (String) request.get("schema");
+            fieldMappingService.warmupConnectionCache(connectionId, schema);
+            
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "字段映射缓存预热完成");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("预热字段映射缓存失败: {}", e.getMessage(), e);
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "预热缓存失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
     }
 }

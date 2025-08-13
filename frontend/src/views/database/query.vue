@@ -141,23 +141,37 @@
             </div>
 
             <!-- 查询结果表格 -->
-            <el-table
-              v-else-if="queryResult && queryResult.data && queryResult.data.length > 0"
-              :data="queryResult.data"
-              border
-              stripe
-              height="300"
-              class="result-table"
-            >
+            <div v-if="queryResult && queryResult.data && queryResult.data.length > 0" class="table-container" ref="tableContainer">
+              <el-table
+                :data="queryResult.data"
+                stripe
+                class="result-table"
+                :max-height="380"
+              >
               <el-table-column
                 v-for="column in queryResult.columns"
                 :key="column"
                 :prop="column"
-                :label="column"
-                :min-width="120"
+                :label="getColumnDisplayName(column)"
+                :min-width="200"
                 show-overflow-tooltip
-              />
-            </el-table>
+                resizable
+              >
+                <template #header>
+                  <div class="column-header">
+                    <span class="column-display-name">{{ getColumnDisplayName(column) }}</span>
+                    <el-tooltip 
+                      v-if="hasChineseName(column)" 
+                      :content="`原始字段名: ${column}`" 
+                      placement="top"
+                    >
+                      <el-icon class="column-info-icon"><InfoFilled /></el-icon>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+              </el-table>
+            </div>
 
             <!-- 查询成功但无数据 -->
             <div
@@ -171,7 +185,7 @@
               </div>
             </div>
 
-            <!-- 非查询操作结果（如INSERT/UPDATE/DELETE） -->
+            <!-- 非查询操作结果（如 INSERT/UPDATE/DELETE） -->
             <div
               v-else-if="queryResult && queryResult.message"
               class="operation-result"
@@ -233,9 +247,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CaretRight, Delete, Clock, Search } from '@element-plus/icons-vue'
+import { CaretRight, Delete, Clock, Search, InfoFilled } from '@element-plus/icons-vue'
 import CachedTableList from '@/components/CachedTableList.vue'
 import SqlEditor from '@/components/SqlEditor/SqlEditor.vue'
 import {
@@ -391,7 +405,7 @@ const loadTablesForCompletion = async () => {
     // 清空之前的字段映射
     tableColumnsMap.value.clear()
 
-    // 获取每个表的字段信息（限制前10个表以避免性能问题）
+    // 获取每个表的字段信息（限制前 10 个表以避免性能问题）
     const tablesToLoad = availableTables.value.slice(0, 10)
     for (const tableName of tablesToLoad) {
       try {
@@ -414,9 +428,9 @@ const loadTablesForCompletion = async () => {
   }
 }
 
-// SQL编辑器变化处理
+// SQL 编辑器变化处理
 const handleSqlChange = (sql: string) => {
-  // 可以在这里添加SQL变化的处理逻辑
+  // 可以在这里添加 SQL 变化的处理逻辑
   console.log('SQL changed:', sql)
 }
 
@@ -448,8 +462,19 @@ const executeQuery = async () => {
     // 转换后端返回的数据结构为前端表格需要的格式
     if (result && (result as any).columns && (result as any).rows) {
       const resultData = result as any
+      
+      // 获取列显示映射和增强信息
+      const columnDisplayMapping = resultData.columnDisplayMapping || {}
+      const displayColumns = resultData.displayColumns || resultData.columns
+      const chineseColumnCount = resultData.chineseColumnCount || 0
+      const enableChineseColumnNames = resultData.enableChineseColumnNames !== false
+      
       const transformedResult = {
         ...resultData,
+        columnDisplayMapping,
+        displayColumns,
+        chineseColumnCount,
+        enableChineseColumnNames,
         data: resultData.rows.map((row: any[]) => {
           const rowObj: any = {}
           resultData.columns.forEach((column: string, index: number) => {
@@ -458,12 +483,21 @@ const executeQuery = async () => {
           return rowObj
         })
       }
+      
       queryResult.value = transformedResult
+      
+      // 显示中文字段统计信息
+      if (enableChineseColumnNames && chineseColumnCount > 0) {
+        const totalColumns = resultData.columns?.length || 0
+        const coverage = totalColumns > 0 ? (chineseColumnCount / totalColumns * 100).toFixed(1) : 0
+        ElMessage.success(`查询成功，${chineseColumnCount}/${totalColumns} 个字段显示中文名称 (${coverage}%)`)
+      } else {
+        ElMessage.success('查询执行成功')
+      }
     } else {
       queryResult.value = result
+      ElMessage.success('查询执行成功')
     }
-
-    ElMessage.success('查询执行成功')
 
     // 刷新历史记录
     loadQueryHistory()
@@ -555,6 +589,91 @@ const loadHistoryQuery = (item: any) => {
 const formatTime = (timeStr: string) => {
   return new Date(timeStr).toLocaleString()
 }
+
+// 获取列显示名称的方法
+const getColumnDisplayName = (column: string) => {
+  if (!queryResult.value?.columnDisplayMapping) {
+    return column
+  }
+  return queryResult.value.columnDisplayMapping[column] || column
+}
+
+// 判断列是否有中文名称
+const hasChineseName = (column: string) => {
+  if (!queryResult.value?.enableChineseColumnNames) {
+    return false
+  }
+  const displayName = getColumnDisplayName(column)
+  return displayName !== column
+}
+
+// 根据列名长度计算列宽
+const getColumnWidth = (column: string) => {
+  const displayName = getColumnDisplayName(column)
+  const baseWidth = 180  // 增加基础宽度
+  const charWidth = 14   // 增加字符宽度
+  const padding = 50     // 增加 padding
+  const iconWidth = hasChineseName(column) ? 25 : 0 // 图标宽度
+  
+  // 计算文字宽度（中文字符宽度约为英文的 1.6 倍）
+  const textWidth = displayName.split('').reduce((width, char) => {
+    return width + (char.match(/[\u4e00-\u9fff]/) ? charWidth * 1.6 : charWidth)
+  }, 0)
+  
+  const calculatedWidth = Math.max(baseWidth, textWidth + padding + iconWidth)
+  
+  // 设置更大的最大宽度，确保内容能完整显示
+  return Math.min(calculatedWidth, 350)
+}
+
+// 计算预期表格最小宽度
+const getExpectedTableWidth = () => {
+  if (!queryResult.value?.columns) {
+    return 1300
+  }
+  
+  const columns = queryResult.value.columns
+  // 每列最小 200px 宽度
+  const minWidth = columns.length * 200
+  
+  return minWidth
+}
+
+// 表格容器引用
+const tableContainer = ref<HTMLDivElement>()
+
+// 检查滚动条状态（调试用）
+const checkScrollBars = () => {
+  if (tableContainer.value && queryResult.value) {
+    const element = tableContainer.value
+    const table = element.querySelector('.el-table')
+    const hasHorizontalScroll = element.scrollWidth > element.clientWidth
+    const hasVerticalScroll = element.scrollHeight > element.clientHeight
+    const columnCount = queryResult.value.columns?.length || 0
+    const expectedWidth = getExpectedTableWidth()
+    
+    console.log('滚动条状态检查：', {
+      容器宽度: element.clientWidth,
+      容器滚动宽度: element.scrollWidth,
+      表格实际宽度: table ? table.offsetWidth : 'N/A',
+      预期最小宽度: expectedWidth,
+      列数: columnCount,
+      每列最小宽度: '200px',
+      hasHorizontalScroll,
+      hasVerticalScroll
+    })
+  }
+}
+
+// 监听查询结果变化，检查滚动条
+watch(queryResult, () => {
+  if (queryResult.value) {
+    // 延迟执行，确保 DOM 更新完成
+    nextTick(() => {
+      setTimeout(checkScrollBars, 100)
+    })
+  }
+})
 
 // 生命周期
 onMounted(() => {
@@ -715,8 +834,44 @@ onMounted(() => {
   padding: 20px;
 }
 
+.table-container {
+  width: 100%;
+  height: 400px;
+  overflow: auto;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  position: relative;
+  background: white;
+}
+
+/* 滚动条样式 */
+.table-container::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.table-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 7px;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 7px;
+  border: 2px solid #f1f1f1;
+}
+
+.table-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.table-container::-webkit-scrollbar-corner {
+  background: #f1f1f1;
+}
+
+/* 表格样式 */
 .result-table {
-  height: 100%;
+  width: 100%;
 }
 
 .empty-result {
@@ -807,5 +962,58 @@ onMounted(() => {
 .history-status.error {
   background: #fef0f0;
   color: #f56c6c;
+}
+
+/* 中文列名相关样式 */
+.column-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+.column-display-name {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.column-info-icon {
+  font-size: 14px;
+  color: var(--el-color-primary);
+  cursor: help;
+  opacity: 0.7;
+}
+
+.column-info-icon:hover {
+  opacity: 1;
+}
+
+/* 表格列标题样式优化 */
+:deep(.result-table .el-table__header-wrapper) {
+  .el-table__header {
+    th {
+      background-color: var(--el-fill-color-light);
+      
+      .cell {
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        padding: 8px 12px;
+      }
+    }
+  }
+}
+
+/* 有中文名的列标题样式 */
+:deep(.result-table .el-table__header-wrapper) {
+  .el-table__header {
+    th:has(.column-info-icon) {
+      background-color: var(--el-color-primary-light-9);
+      
+      .cell {
+        color: var(--el-color-primary);
+      }
+    }
+  }
 }
 </style>

@@ -82,7 +82,7 @@ export const getDbTablesApi = (connectionId: string, schema?: string) => {
   // 数据库表列表加载可能需要更长时间，特别是对于大型数据库
   return http.request<string[]>("get", `/api/database/connections/${connectionId}/tables`, {
     params,
-    timeout: 60000 // 60秒超时，专门用于表列表加载
+    timeout: 60000 // 60 秒超时，专门用于表列表加载
   });
 };
 
@@ -231,7 +231,7 @@ export const getTablesWithPaginationApi = (connectionId: string, params?: {
 }) => {
   return http.request<any>("get", `/api/database/connections/${connectionId}/tables/page`, {
     params,
-    timeout: 45000 // 45秒超时，用于分页表列表加载
+    timeout: 450000 // 450 秒超时，用于分页表列表加载
   });
 };
 
@@ -246,14 +246,14 @@ export const getTableColumnsApi = (connectionId: string, tableName: string, sche
   const params = schema ? { schema } : {};
   return http.request<any[]>("get", `/api/database/connections/${connectionId}/tables/${tableName}/columns`, {
     params,
-    timeout: 30000 // 30秒超时，用于表结构获取
+    timeout: 30000 // 30 秒超时，用于表结构获取
   });
 };
 
-/** 获取数据库Schema列表 */
+/** 获取数据库 Schema 列表 */
 export const getSchemasApi = (connectionId: string) => {
   return http.request<string[]>("get", `/api/database/connections/${connectionId}/schemas`, {
-    timeout: 30000 // 30秒超时，用于Schema列表获取
+    timeout: 30000 // 30 秒超时，用于 Schema 列表获取
   });
 };
 
@@ -268,16 +268,62 @@ export const checkConnectionHealthApi = (connectionId: string) => {
     "get",
     `/api/database/connections/${connectionId}/health`,
     {
-      timeout: 10000 // 10秒超时，用于健康检查
+      timeout: 10000 // 10 秒超时，用于健康检查
     }
   );
 };
 
-/** 执行SQL查询 */
+/** 执行 SQL 查询 */
 export const executeQueryApi = (connectionId: string, data: { sql: string; schema?: string }) => {
   return http.request<QueryResult>("post", `/api/database/connections/${connectionId}/query`, {
     data,
-    timeout: 60000 // 60秒超时，用于SQL查询执行
+    timeout: 60000 // 60 秒超时，用于 SQL 查询执行
+  });
+};
+
+// ================ 新增快速加载API ================
+
+/** 快速获取基础表信息列表（只包含表名和备注，不含详细信息） */
+export const getBasicTablesApi = (connectionId: string, schema?: string) => {
+  const params = schema ? { schema } : {};
+  return http.request<any[]>("get", `/api/database/connections/${connectionId}/tables/basic`, {
+    params,
+    timeout: 30000 // 30 秒超时，快速查询
+  });
+};
+
+/** 快速分页获取基础表信息列表 */
+export const getBasicTablesWithPaginationApi = (connectionId: string, params?: {
+  page?: number;
+  size?: number;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  schema?: string;
+}) => {
+  return http.request<any>("get", `/api/database/connections/${connectionId}/tables/basic/page`, {
+    params,
+    timeout: 30000 // 30 秒超时，快速查询
+  });
+};
+
+/** 获取单个表的详细信息（按需加载） */
+export const getTableDetailsApi = (connectionId: string, tableName: string, schema?: string) => {
+  const params = schema ? { schema } : {};
+  return http.request<any>("get", `/api/database/connections/${connectionId}/tables/${tableName}/details`, {
+    params,
+    timeout: 15000 // 15 秒超时，单表详情
+  });
+};
+
+/** 批量获取多个表的基础统计信息 */
+export const getBatchTableStatsApi = (connectionId: string, data: {
+  tableNames: string[];
+  schema?: string;
+}) => {
+  return http.request<Record<string, any>>("post", `/api/database/connections/${connectionId}/tables/batch-stats`, {
+    data,
+    timeout: 45000 // 45 秒超时，批量查询
   });
 };
 

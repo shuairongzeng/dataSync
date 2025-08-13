@@ -52,6 +52,11 @@ public class DatabaseOptimizationConfig {
     private boolean enablePoolMonitoring = true;
 
     /**
+     * 元数据查询超时时间（秒）
+     */
+    private int metadataTimeoutSeconds = 120;
+
+    /**
      * 重试配置
      */
     private RetryConfig retry = new RetryConfig();
@@ -134,6 +139,14 @@ public class DatabaseOptimizationConfig {
 
     public void setEnablePoolMonitoring(boolean enablePoolMonitoring) {
         this.enablePoolMonitoring = enablePoolMonitoring;
+    }
+
+    public int getMetadataTimeoutSeconds() {
+        return metadataTimeoutSeconds;
+    }
+
+    public void setMetadataTimeoutSeconds(int metadataTimeoutSeconds) {
+        this.metadataTimeoutSeconds = metadataTimeoutSeconds;
     }
 
     public RetryConfig getRetry() {

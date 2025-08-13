@@ -24,6 +24,10 @@ public class CacheConfig {
     public static final String TABLE_COLUMNS_CACHE = "tableColumns";
     public static final String DB_SCHEMAS_CACHE = "dbSchemas";
     public static final String TABLE_METADATA_CACHE = "tableMetadata";
+    
+    // 新增：基础表信息缓存（快速加载用）
+    public static final String BASIC_TABLES_CACHE = "basicTables";
+    public static final String BASIC_TABLE_METADATA_CACHE = "basicTableMetadata";
 
     /**
      * 配置Caffeine缓存管理器
@@ -37,7 +41,9 @@ public class CacheConfig {
             DB_TABLES_CACHE,
             TABLE_COLUMNS_CACHE,
             DB_SCHEMAS_CACHE,
-            TABLE_METADATA_CACHE
+            TABLE_METADATA_CACHE,
+            BASIC_TABLES_CACHE,
+            BASIC_TABLE_METADATA_CACHE
         ));
         
         // 配置Caffeine缓存属性

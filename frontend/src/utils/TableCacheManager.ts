@@ -12,6 +12,8 @@ export interface TableInfo {
   schema?: string
   connectionId: string
   lastUpdated: number
+  // 标志位：表示详细信息（如列数、主键等）是否已加载
+  _detailsLoaded?: boolean
 }
 
 export interface CacheMetadata {

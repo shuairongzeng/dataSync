@@ -88,9 +88,51 @@
       </el-auto-resizer>
     </div>
 
-    <!-- 加载状态 -->
+    <!-- 详细加载状态 -->
     <div class="loading-overlay" v-if="loading">
-      <el-skeleton :rows="5" animated />
+      <div class="loading-content">
+        <el-skeleton v-if="!showDetailedProgress" :rows="5" animated />
+        
+        <!-- 详细进度显示 -->
+        <div v-else class="detailed-loading">
+          <div class="loading-header">
+            <el-icon class="loading-icon" size="24">
+              <Loading />
+            </el-icon>
+            <h3 class="loading-title">{{ loadingStage }}</h3>
+          </div>
+          
+          <div class="loading-body">
+            <el-progress 
+              v-if="estimatedTotal > 0"
+              :percentage="loadingProgress" 
+              :stroke-width="8"
+              status="success"
+              striped
+              striped-flow
+            >
+              <template #default="{ percentage }">
+                <span class="progress-text">{{ percentage }}%</span>
+              </template>
+            </el-progress>
+            
+            <div class="loading-details" v-if="loadingDetails">
+              {{ loadingDetails }}
+            </div>
+            
+            <div class="loading-stats" v-if="loadedCount > 0 || estimatedTotal > 0">
+              <span>已加载：{{ loadedCount }}</span>
+              <span v-if="estimatedTotal > 0">/ {{ estimatedTotal }} 张表</span>
+            </div>
+          </div>
+          
+          <div class="loading-tips">
+            <el-text size="small" type="info">
+              💡 首次加载较慢，后续访问将使用缓存快速响应
+            </el-text>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 右键菜单 -->
@@ -261,9 +303,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { ElMessage, ElIcon, ElTag, ElText, ElTooltip, ElButton } from 'element-plus'
-import { Search, Refresh, Clock, Document, View, Close, Key, CopyDocument } from '@element-plus/icons-vue'
+import { Search, Refresh, Clock, Document, View, Close, Key, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { tableCacheManager, type TableInfo, type CacheMetadata } from '@/utils/TableCacheManager'
-import { getTablesWithPaginationApi, getTableColumnsApi } from '@/api/database'
+import { getTablesWithPaginationApi, getTableColumnsApi, getBasicTablesApi, getBasicTablesWithPaginationApi, getTableDetailsApi, getBatchTableStatsApi } from '@/api/database'
 
 // Props
 interface Props {
@@ -289,6 +331,14 @@ const tableData = ref<TableInfo[]>([])
 const filteredData = ref<TableInfo[]>([])
 const cacheMetadata = ref<CacheMetadata | null>(null)
 const tableKey = ref(0) // 用于强制重新渲染表格
+
+// 新增：详细的加载状态管理
+const loadingProgress = ref(0)
+const loadingStage = ref('')
+const loadingDetails = ref('')
+const showDetailedProgress = ref(false)
+const estimatedTotal = ref(0)
+const loadedCount = ref(0)
 
 // SQL 菜单相关状态
 const showSqlMenu = ref(false)
@@ -698,13 +748,48 @@ watch(showFieldDialog, (newVal) => {
   }
 })
 
+// 重置加载状态
+const resetLoadingState = () => {
+  loadingProgress.value = 0
+  loadingStage.value = ''
+  loadingDetails.value = ''
+  showDetailedProgress.value = false
+  estimatedTotal.value = 0
+  loadedCount.value = 0
+}
+
+// 更新加载进度
+const updateLoadingProgress = (stage: string, details: string, loaded: number = 0, total: number = 0) => {
+  loadingStage.value = stage
+  loadingDetails.value = details
+  loadedCount.value = loaded
+  if (total > 0) {
+    estimatedTotal.value = total
+    loadingProgress.value = Math.round((loaded / total) * 100)
+  }
+  
+  // 当开始显示详细进度时，启用详细进度显示
+  if (stage && details) {
+    showDetailedProgress.value = true
+  }
+}
+
+// 优化后的快速加载方法 - 使用分层加载策略
 const loadTables = async (useCache = true) => {
   if (!props.connectionId) return
+
+  // 重置加载状态
+  resetLoadingState()
 
   // 如果允许使用缓存且有缓存，直接使用缓存数据
   if (useCache) {
     const cachedTables = tableCacheManager.getCachedTables(props.connectionId, props.schema)
     if (cachedTables) {
+      updateLoadingProgress('加载缓存数据', '从本地缓存快速加载表信息...')
+      
+      // 稍微延迟以显示加载状态
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
       tableData.value = cachedTables
       cacheMetadata.value = tableCacheManager.getCacheMetadata(props.connectionId, props.schema)
       applySearch()
@@ -715,12 +800,17 @@ const loadTables = async (useCache = true) => {
   loading.value = true
 
   try {
-    // 分批加载所有表数据
+    updateLoadingProgress('初始化连接', '正在连接数据库并准备获取表列表...')
+    
+    // 使用快速API分批加载基础表信息（只包含表名和备注）
     const allTables: TableInfo[] = []
     let currentPage = 1
     let hasMore = true
-    const pageSize = 100
+    const pageSize = 200 // 增加页面大小，因为只获取基础信息
 
+    // 先获取第一页以了解总数
+    updateLoadingProgress('获取表列表', '正在获取数据库表信息...')
+    
     while (hasMore) {
       const params = {
         page: currentPage,
@@ -730,35 +820,59 @@ const loadTables = async (useCache = true) => {
         schema: props.schema
       }
 
-      const response = await getTablesWithPaginationApi(props.connectionId, params)
+      updateLoadingProgress(
+        '获取表列表', 
+        `正在获取第 ${currentPage} 页表信息...`,
+        allTables.length,
+        estimatedTotal.value
+      )
+
+      const response = await getBasicTablesWithPaginationApi(props.connectionId, params)
       
       if (response.data && response.data.length > 0) {
-        // 转换数据格式
+        // 如果是第一页，设置预估总数
+        if (currentPage === 1 && response.total) {
+          estimatedTotal.value = response.total
+        }
+        
+        // 转换基础数据格式，详细信息设为默认值
         const tables: TableInfo[] = response.data.map((table: any) => ({
           tableName: table.tableName || table.name,
           tableType: table.tableType || 'TABLE',
-          columnCount: table.columnCount || 0,
-          remarks: table.remarks || table.comment,
-          hasPrimaryKey: table.hasPrimaryKey || false,
+          columnCount: 0, // 默认值，将在需要时懒加载
+          remarks: table.remarks || table.comment || '',
+          hasPrimaryKey: false, // 默认值，将在需要时懒加载
           schema: props.schema,
           connectionId: props.connectionId,
-          lastUpdated: Date.now()
+          lastUpdated: Date.now(),
+          // 添加标志位，表示详细信息尚未加载
+          _detailsLoaded: false
         }))
         
         allTables.push(...tables)
+        
+        // 更新进度
+        updateLoadingProgress(
+          '获取表列表', 
+          `已获取 ${allTables.length} 张表的基础信息...`,
+          allTables.length,
+          estimatedTotal.value || allTables.length
+        )
       }
 
       hasMore = response.hasNext || false
       currentPage++
 
       // 防止无限循环
-      if (currentPage > 100) {
+      if (currentPage > 200) {
         console.warn('Too many pages, stopping table loading')
         break
       }
     }
 
-    // 缓存数据
+    updateLoadingProgress('保存缓存', '正在保存表信息到本地缓存...', allTables.length, allTables.length)
+    
+    // 缓存基础数据
     tableCacheManager.cacheTables(props.connectionId, props.schema, allTables)
     
     tableData.value = allTables
@@ -766,12 +880,127 @@ const loadTables = async (useCache = true) => {
     
     applySearch()
     
-    ElMessage.success(`成功加载 ${allTables.length} 张表`)
+    ElMessage.success(`快速加载 ${allTables.length} 张表（基础信息）`)
+    
+    // 异步批量加载可见表的详细信息
+    setTimeout(() => {
+      loadVisibleTableDetails()
+    }, 500) // 延迟500ms开始加载详细信息
+    
   } catch (error: any) {
     console.error('加载表列表失败：', error)
-    ElMessage.error('加载表列表失败：' + (error.message || '未知错误'))
+    
+    // 回退到旧的API
+    try {
+      updateLoadingProgress('尝试传统方式', '快速加载失败，正在尝试传统加载方式...')
+      ElMessage.warning('正在尝试传统加载方式...')
+      await loadTablesLegacy(false)
+    } catch (fallbackError: any) {
+      ElMessage.error('加载表列表失败：' + (error.message || '未知错误'))
+    }
   } finally {
     loading.value = false
+    resetLoadingState()
+  }
+}
+
+// 传统加载方法（作为回退方案）
+const loadTablesLegacy = async (useCache = true) => {
+  if (!props.connectionId) return
+
+  if (useCache) {
+    const cachedTables = tableCacheManager.getCachedTables(props.connectionId, props.schema)
+    if (cachedTables) {
+      tableData.value = cachedTables
+      cacheMetadata.value = tableCacheManager.getCacheMetadata(props.connectionId, props.schema)
+      applySearch()
+      return
+    }
+  }
+
+  const allTables: TableInfo[] = []
+  let currentPage = 1
+  let hasMore = true
+  const pageSize = 100
+
+  while (hasMore) {
+    const params = {
+      page: currentPage,
+      size: pageSize,
+      sortBy: 'name',
+      sortOrder: 'asc',
+      schema: props.schema
+    }
+
+    const response = await getTablesWithPaginationApi(props.connectionId, params)
+    
+    if (response.data && response.data.length > 0) {
+      const tables: TableInfo[] = response.data.map((table: any) => ({
+        tableName: table.tableName || table.name,
+        tableType: table.tableType || 'TABLE',
+        columnCount: table.columnCount || 0,
+        remarks: table.remarks || table.comment,
+        hasPrimaryKey: table.hasPrimaryKey || false,
+        schema: props.schema,
+        connectionId: props.connectionId,
+        lastUpdated: Date.now(),
+        _detailsLoaded: true
+      }))
+      
+      allTables.push(...tables)
+    }
+
+    hasMore = response.hasNext || false
+    currentPage++
+
+    if (currentPage > 100) {
+      console.warn('Too many pages, stopping table loading')
+      break
+    }
+  }
+
+  tableCacheManager.cacheTables(props.connectionId, props.schema, allTables)
+  tableData.value = allTables
+  cacheMetadata.value = tableCacheManager.getCacheMetadata(props.connectionId, props.schema)
+  applySearch()
+  
+  ElMessage.success(`成功加载 ${allTables.length} 张表（完整信息）`)
+}
+
+// 懒加载可见表的详细信息
+const loadVisibleTableDetails = async () => {
+  try {
+    // 获取前50个表的详细信息（这些通常是用户最关心的）
+    const tablesToLoad = filteredData.value.slice(0, 50).filter(table => !table._detailsLoaded)
+    
+    if (tablesToLoad.length === 0) return
+    
+    // 批量获取表统计信息
+    const tableNames = tablesToLoad.map(table => table.tableName)
+    const stats = await getBatchTableStatsApi(props.connectionId, {
+      tableNames,
+      schema: props.schema
+    })
+    
+    // 更新表信息
+    tablesToLoad.forEach(table => {
+      const stat = stats[table.tableName]
+      if (stat && !stat.error) {
+        table.columnCount = stat.columnCount || 0
+        table.hasPrimaryKey = stat.hasPrimaryKey || false
+        table._detailsLoaded = true
+      }
+    })
+    
+    // 更新缓存
+    tableCacheManager.cacheTables(props.connectionId, props.schema, tableData.value)
+    
+    // 触发表格更新
+    tableKey.value++
+    
+  } catch (error: any) {
+    console.warn('批量加载表详细信息失败：', error)
+    // 静默失败，不影响基础功能
   }
 }
 
@@ -1369,11 +1598,105 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
+}
+
+.loading-content {
+  width: 100%;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.detailed-loading {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  padding: 32px;
+  text-align: center;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.loading-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.loading-icon {
+  color: var(--el-color-primary);
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.loading-body {
+  margin-bottom: 24px;
+}
+
+.loading-details {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  margin: 16px 0;
+  line-height: 1.5;
+}
+
+.loading-stats {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-top: 12px;
+}
+
+.loading-stats span {
+  padding: 4px 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.progress-text {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.loading-tips {
+  padding: 16px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  border-left: 4px solid var(--el-color-primary);
+}
+
+/* 进度条样式优化 */
+:global(.el-progress__text) {
+  font-weight: 600 !important;
+}
+
+:global(.el-progress-bar__outer) {
+  background-color: var(--el-fill-color-light) !important;
+}
+
+:global(.el-progress-bar__inner) {
+  background: linear-gradient(90deg, var(--el-color-primary), var(--el-color-primary-light-3)) !important;
 }
 
 .empty-actions {
