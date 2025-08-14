@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transfer Tooltip测试</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/element-plus"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        /* Transfer 组件表名显示优化 */
+        .table-transfer .transfer-item-label {
+            display: inline-block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            line-height: 1.4;
+        }
+        
+        /* 为了提高可读性，为transfer列表项添加鼠标悬停效果 */
+        .table-transfer .el-transfer-panel__item {
+            transition: background-color 0.2s ease;
+        }
+        
+        .table-transfer .el-transfer-panel__item:hover {
+            background-color: #f5f7fa;
+        }
+        
+        /* 优化transfer面板的宽度和高度 */
+        .table-transfer .el-transfer-panel {
+            width: 280px;
+            height: 320px;
+        }
+        
+        .table-transfer .el-transfer-panel__body {
+            height: 260px;
+        }
+        
+        .table-transfer .el-transfer-panel__list {
+            height: 230px;
+        }
+        
+        /* 优化transfer中间按钮为垂直排列，节省水平空间 */
+        .table-transfer .el-transfer__buttons {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            padding: 0 16px;
+            min-width: 60px;
+        }
+        
+        /* 优化按钮样式 */
+        .table-transfer .el-transfer__button {
+            margin: 0;
+            width: 40px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* 确俛transfer容器能够水平对齐，并在同一行显示 */
+        .table-transfer .el-transfer {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            flex-wrap: nowrap;
+            width: 100%;
+            min-width: 620px;
+        }
+        
+        /* Transfer 容器样式，确保有足够空间显示 */
+        .transfer-container {
+            overflow-x: auto;
+            padding: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="test-container">
+            <h1>Transfer组件优化测试</h1>
+            <p>测试功能：</p>
+            <ul>
+                <li>1. 长表名的tooltip显示效果（鼠标悬停在长表名上）</li>
+                <li>2. 按钮垂直排列节省水平空间</li>
+                <li>3. 两个面板在同一行显示</li>
+            </ul>
+            
+            <div class="transfer-container">
+                <el-transfer
+                v-model="selectedTables"
+                :data="tableList"
+                :titles="['可用表', '同步表']"
+                filterable
+                filter-placeholder="搜索表名"
+                class="table-transfer"
+            >
+                <!-- 自定义左侧列表项渲染 -->
+                <template #default="{ option }">
+                    <el-tooltip
+                        :content="option.label"
+                        placement="top"
+                        :show-after="800"
+                        :disabled="option.label.length <= 30"
+                    >
+                        <span class="transfer-item-label">{{ option.label }}</span>
+                    </el-tooltip>
+                </template>
+            </el-transfer>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <h3>已选择的表：</h3>
+                <ul>
+                    <li v-for="table in selectedTables" :key="table">{{ table }}</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+        
+        createApp({
+            data() {
+                return {
+                    selectedTables: [],
+                    tableList: [
+                        { key: 'users', label: 'users' },
+                        { key: 'orders', label: 'orders' },
+                        { key: 'products', label: 'products' },
+                        { key: 'test_very_long_table_name_for_tooltip_testing_001', label: 'test_very_long_table_name_for_tooltip_testing_001' },
+                        { key: 'another_extremely_long_table_name_that_exceeds_normal_display_width', label: 'another_extremely_long_table_name_that_exceeds_normal_display_width' },
+                        { key: 'short_table', label: 'short_table' },
+                        { key: 'medium_length_table_name', label: 'medium_length_table_name' },
+                        { key: 'super_duper_ultra_mega_long_table_name_with_many_words_and_underscores_to_test_tooltip_functionality', label: 'super_duper_ultra_mega_long_table_name_with_many_words_and_underscores_to_test_tooltip_functionality' },
+                        { key: 'customer_orders_history_log', label: 'customer_orders_history_log' },
+                        { key: 'inventory', label: 'inventory' }
+                    ]
+                }
+            }
+        }).use(ElementPlus).mount('#app');
+    </script>
+</body>
+</html>

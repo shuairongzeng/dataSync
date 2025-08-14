@@ -276,11 +276,17 @@ public class DatabaseMetadataUtil {
         
         String sql;
         if (schemaName != null && !schemaName.trim().isEmpty()) {
-            sql = "SELECT column_name, data_type, data_length, data_precision, data_scale, nullable, " +
-                  "data_default, ordinal_position FROM all_tab_columns WHERE owner = UPPER(?) AND table_name = UPPER(?) ORDER BY column_id";
+            sql = "SELECT c.column_name, c.data_type, c.data_length, c.data_precision, c.data_scale, c.nullable, " +
+                  "c.data_default, c.column_id, cc.comments " +
+                  "FROM all_tab_columns c " +
+                  "LEFT JOIN all_col_comments cc ON c.owner = cc.owner AND c.table_name = cc.table_name AND c.column_name = cc.column_name " +
+                  "WHERE c.owner = UPPER(?) AND c.table_name = UPPER(?) ORDER BY c.column_id";
         } else {
-            sql = "SELECT column_name, data_type, data_length, data_precision, data_scale, nullable, " +
-                  "data_default, column_id FROM user_tab_columns WHERE table_name = UPPER(?) ORDER BY column_id";
+            sql = "SELECT c.column_name, c.data_type, c.data_length, c.data_precision, c.data_scale, c.nullable, " +
+                  "c.data_default, c.column_id, cc.comments " +
+                  "FROM user_tab_columns c " +
+                  "LEFT JOIN user_col_comments cc ON c.table_name = cc.table_name AND c.column_name = cc.column_name " +
+                  "WHERE c.table_name = UPPER(?) ORDER BY c.column_id";
         }
         
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
@@ -299,13 +305,10 @@ public class DatabaseMetadataUtil {
                     columnInfo.setTypeName(rs.getString("data_type"));
                     columnInfo.setNullable("Y".equalsIgnoreCase(rs.getString("nullable")));
                     columnInfo.setDefaultValue(rs.getString("data_default"));
+                    columnInfo.setRemarks(rs.getString("comments")); // 设置字段备注
                     
-                    // Oracle使用column_id作为位置
-                    if (schemaName != null && !schemaName.trim().isEmpty()) {
-                        columnInfo.setOrdinalPosition(rs.getInt("ordinal_position"));
-                    } else {
-                        columnInfo.setOrdinalPosition(rs.getInt("column_id"));
-                    }
+                    // Oracle统一使用column_id作为位置
+                    columnInfo.setOrdinalPosition(rs.getInt("column_id"));
                     
                     // 设置长度和精度
                     if (rs.getObject("data_length") != null) {

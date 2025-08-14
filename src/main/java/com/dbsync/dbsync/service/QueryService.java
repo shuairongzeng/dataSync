@@ -12,6 +12,7 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import com.dbsync.dbsync.util.SqlScriptParser;
 
 /**
  * 查询执行服务类
@@ -27,9 +28,13 @@ public class QueryService {
     @Autowired
     private DatabaseMetadataCacheService cacheService;
     
+    @Autowired
+    private SqlScriptService sqlScriptService;
+    
     
     /**
      * 执行SQL查询
+     * 自动检测多语句脚本并使用适当的执行器
      */
     public QueryResult executeQuery(Long connectionId, String sql, String schema) {
         long startTime = System.currentTimeMillis();
@@ -43,6 +48,14 @@ public class QueryService {
             if (!connection.getEnabled()) {
                 throw new RuntimeException("数据库连接已禁用: " + connection.getName());
             }
+            
+            // 检测是否为多语句脚本
+            if (isMultiStatementScript(sql, connection.getDbType())) {
+                logger.info("检测到多语句脚本，使用脚本执行器处理");
+                return executeAsScript(connectionId, sql, schema, startTime);
+            }
+            
+            // 单语句执行原有逻辑
             
             String jdbcUrl = buildJdbcUrl(connection, schema);
             
@@ -177,18 +190,15 @@ public class QueryService {
         
         String upperSql = sql.toUpperCase().trim();
         
-        // 检查危险操作
+        // 检查危险操作（仅警告，不禁止执行）
         String[] dangerousKeywords = {
-            "DROP TABLE", "DROP DATABASE", "DROP SCHEMA", "DROP INDEX",
-            "TRUNCATE", "DELETE FROM", "ALTER TABLE", "CREATE TABLE",
-            "CREATE DATABASE", "CREATE SCHEMA"
+            "DROP DATABASE", "DROP SCHEMA", "TRUNCATE"
         };
         
         for (String keyword : dangerousKeywords) {
             if (upperSql.contains(keyword)) {
-                logger.warn("检测到潜在危险SQL操作: {}", keyword);
-                // 这里可以根据需要决定是否允许执行
-                // throw new RuntimeException("不允许执行危险操作: " + keyword);
+                logger.warn("检测到潜在高风险SQL操作: {}", keyword);
+                // 仅警告，允许执行常规DDL操作
             }
         }
     }
@@ -247,6 +257,96 @@ public class QueryService {
         } catch (SQLException e) {
             logger.error("获取表结构失败: {}", e.getMessage(), e);
             throw new RuntimeException("获取表结构失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 检测是否为多语句脚本
+     */
+    private boolean isMultiStatementScript(String sql, String dbType) {
+        if (sql == null || sql.trim().isEmpty()) {
+            return false;
+        }
+        
+        String cleanedSql = sql.trim();
+        
+        // 检测多个分号分隔的语句
+        String[] parts = cleanedSql.split(";");
+        if (parts.length > 1) {
+            // 过滤空语句
+            int nonEmptyParts = 0;
+            for (String part : parts) {
+                if (part.trim().length() > 0) {
+                    nonEmptyParts++;
+                }
+            }
+            if (nonEmptyParts > 1) {
+                return true;
+            }
+        }
+        
+        // Oracle特定检测：包含/分隔符或复杂块语句
+        if ("oracle".equalsIgnoreCase(dbType)) {
+            if (cleanedSql.contains("/\n") || cleanedSql.endsWith("/") ||
+                cleanedSql.toUpperCase().contains("CREATE OR REPLACE TRIGGER") ||
+                cleanedSql.toUpperCase().contains("BEGIN") && cleanedSql.toUpperCase().contains("END")) {
+                return true;
+            }
+        }
+        
+        // 检测多行SQL注释
+        if (cleanedSql.contains("--") && cleanedSql.split("\n").length > 3) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 使用脚本执行器执行多语句脚本
+     */
+    private QueryResult executeAsScript(Long connectionId, String sql, String schema, long startTime) {
+        try {
+            SqlScriptService.ScriptExecutionResult scriptResult = sqlScriptService.executeScript(
+                connectionId, sql, schema, true // 默认在事务中执行
+            );
+            
+            // 将脚本执行结果转换为QueryResult格式
+            List<String> columns = new ArrayList<>();
+            columns.add("语句编号");
+            columns.add("类型");
+            columns.add("状态");
+            columns.add("消息");
+            columns.add("执行时间(ms)");
+            columns.add("影响行数");
+            
+            List<List<Object>> rows = new ArrayList<>();
+            
+            for (int i = 0; i < scriptResult.getStatementResults().size(); i++) {
+                SqlScriptService.StatementResult stmtResult = scriptResult.getStatementResults().get(i);
+                List<Object> row = new ArrayList<>();
+                
+                row.add(i + 1);
+                row.add(stmtResult.getStatement().getType() + "/" + stmtResult.getStatement().getCategory());
+                row.add(stmtResult.isSuccess() ? "成功" : "失败");
+                row.add(stmtResult.getMessage());
+                row.add(stmtResult.getExecutionTime());
+                row.add(stmtResult.getAffectedRows());
+                
+                rows.add(row);
+            }
+            
+            String message = String.format("脚本执行完成：总计 %d 条语句，成功 %d 条，失败 %d 条", 
+                                          scriptResult.getTotalCount(), 
+                                          scriptResult.getSuccessCount(), 
+                                          scriptResult.getFailedCount());
+            
+            return new QueryResult(columns, rows, rows.size(), scriptResult.getTotalTime(), message);
+            
+        } catch (Exception e) {
+            long executionTime = System.currentTimeMillis() - startTime;
+            logger.error("脚本执行失败: {}", e.getMessage(), e);
+            throw new RuntimeException("脚本执行失败: " + e.getMessage());
         }
     }
     

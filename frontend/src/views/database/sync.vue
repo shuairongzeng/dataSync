@@ -112,7 +112,7 @@
               <el-select 
                 v-model="formData.sourceConnectionId" 
                 placeholder="请选择源数据库"
-                @change="handleSourceChange"
+                @change="handleSourceConnectionChange"
               >
                 <el-option
                   v-for="conn in connectionList"
@@ -128,6 +128,7 @@
               <el-select 
                 v-model="formData.targetConnectionId" 
                 placeholder="请选择目标数据库"
+                @change="handleTargetConnectionChange"
               >
                 <el-option
                   v-for="conn in connectionList"
@@ -143,18 +144,48 @@
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="源Schema" prop="sourceSchemaName">
-              <el-input v-model="formData.sourceSchemaName" placeholder="可选，默认为空" />
+              <el-select
+                v-model="formData.sourceSchemaName"
+                placeholder="请选择Schema（可选）"
+                clearable
+                filterable
+                :loading="loadingSourceSchemas"
+                :disabled="!formData.sourceConnectionId"
+              >
+                <el-option value="" label="（默认Schema）" />
+                <el-option
+                  v-for="schema in sourceSchemaList"
+                  :key="schema"
+                  :label="schema"
+                  :value="schema"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="目标Schema" prop="targetSchemaName">
-              <el-input v-model="formData.targetSchemaName" placeholder="可选，默认为空" />
+              <el-select
+                v-model="formData.targetSchemaName"
+                placeholder="请选择Schema（可选）"
+                clearable
+                filterable
+                :loading="loadingTargetSchemas"
+                :disabled="!formData.targetConnectionId"
+              >
+                <el-option value="" label="（默认Schema）" />
+                <el-option
+                  v-for="schema in targetSchemaList"
+                  :key="schema"
+                  :label="schema"
+                  :value="schema"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
 
         <el-form-item label="同步表" prop="tables">
-          <div class="w-full">
+          <div class="w-full transfer-container">
             <div class="flex items-center mb-2">
               <el-button size="small" @click="loadSourceTables" :loading="loadingTables">
                 {{ loadingTables ? '加载中...' : '加载源表列表' }}
@@ -186,7 +217,22 @@
               filterable
               filter-placeholder="搜索表名"
               :disabled="loadingTables"
-            />
+              class="table-transfer"
+            >
+              <!-- 自定义左侧列表项渲染 -->
+              <template #default="{ option }">
+                <el-tooltip
+                  :content="option.label"
+                  placement="top"
+                  :show-after="600"
+                  :hide-after="200"
+                  :disabled="option.label.length <= 30"
+                  effect="dark"
+                >
+                  <span class="transfer-item-label">{{ option.label }}</span>
+                </el-tooltip>
+              </template>
+            </el-transfer>
           </div>
         </el-form-item>
 
@@ -244,7 +290,8 @@ import {
   getSyncTaskLogsApi,
   getDbConnectionsApi,
   getDbTablesApi,
-  checkConnectionHealthApi
+  checkConnectionHealthApi,
+  getSchemasApi
 } from "@/api/database";
 import { dbMetadataCache, CacheKeys } from '@/utils/cache';
 import { frontendCacheManager } from '@/api/cache';
@@ -260,9 +307,13 @@ const logDialogVisible = ref(false);
 const isEdit = ref(false);
 const submitLoading = ref(false);
 const loadingTables = ref(false);
+const loadingSourceSchemas = ref(false);
+const loadingTargetSchemas = ref(false);
 const taskList = ref<SyncTask[]>([]);
 const connectionList = ref<DbConfig[]>([]);
 const sourceTableList = ref<{key: string, label: string}[]>([]);
+const sourceSchemaList = ref<string[]>([]);
+const targetSchemaList = ref<string[]>([]);
 const taskLogs = ref<string[]>([]);
 const currentLogTaskId = ref<string>("");
 const formRef = ref<FormInstance>();
@@ -383,6 +434,17 @@ const loadSourceTables = async (retryCount = 0) => {
       label: table
     }));
 
+    // 在开发环境下添加一些测试用的长表名数据（用于测试tooltip功能）
+    if (process.env.NODE_ENV === 'development' && tableOptions.length < 5) {
+      tableOptions.push(
+        { key: 'test_very_long_table_name_for_tooltip_testing_001', label: 'test_very_long_table_name_for_tooltip_testing_001' },
+        { key: 'another_extremely_long_table_name_that_exceeds_normal_display_width', label: 'another_extremely_long_table_name_that_exceeds_normal_display_width' },
+        { key: 'short_table', label: 'short_table' },
+        { key: 'medium_length_table_name', label: 'medium_length_table_name' },
+        { key: 'super_duper_ultra_mega_long_table_name_with_many_words_and_underscores_to_test_tooltip_functionality', label: 'super_duper_ultra_mega_long_table_name_with_many_words_and_underscores_to_test_tooltip_functionality' }
+      );
+    }
+
     sourceTableList.value = tableOptions;
 
     // 更新缓存
@@ -408,15 +470,83 @@ const loadSourceTables = async (retryCount = 0) => {
   }
 };
 
-// 源数据库改变时清空表选择和缓存
-const handleSourceChange = () => {
+// 加载源数据库Schema列表
+const loadSourceSchemas = async () => {
+  if (!formData.sourceConnectionId) {
+    sourceSchemaList.value = [];
+    return;
+  }
+
+  loadingSourceSchemas.value = true;
+  try {
+    const schemas = await getSchemasApi(formData.sourceConnectionId.toString());
+    sourceSchemaList.value = schemas || [];
+    
+    // 如果当前Schema不在列表中，清空它
+    if (formData.sourceSchemaName && !schemas.includes(formData.sourceSchemaName)) {
+      formData.sourceSchemaName = "";
+    }
+  } catch (error: any) {
+    console.error("加载Schema列表失败:", error);
+    ElMessage.error(`加载源数据库Schema列表失败: ${error.message || '未知错误'}`);
+    sourceSchemaList.value = [];
+  } finally {
+    loadingSourceSchemas.value = false;
+  }
+};
+
+// 加载目标数据库Schema列表
+const loadTargetSchemas = async () => {
+  if (!formData.targetConnectionId) {
+    targetSchemaList.value = [];
+    return;
+  }
+
+  loadingTargetSchemas.value = true;
+  try {
+    const schemas = await getSchemasApi(formData.targetConnectionId.toString());
+    targetSchemaList.value = schemas || [];
+    
+    // 如果当前Schema不在列表中，清空它
+    if (formData.targetSchemaName && !schemas.includes(formData.targetSchemaName)) {
+      formData.targetSchemaName = "";
+    }
+  } catch (error: any) {
+    console.error("加载Schema列表失败:", error);
+    ElMessage.error(`加载目标数据库Schema列表失败: ${error.message || '未知错误'}`);
+    targetSchemaList.value = [];
+  } finally {
+    loadingTargetSchemas.value = false;
+  }
+};
+
+// 源数据库改变时的处理
+const handleSourceConnectionChange = async () => {
+  // 清空相关数据
   formData.tables = [];
+  formData.sourceSchemaName = "";
   sourceTableList.value = [];
+  sourceSchemaList.value = [];
 
   // 清除相关缓存
   if (formData.sourceConnectionId) {
     const cacheKey = CacheKeys.tables(formData.sourceConnectionId, formData.sourceSchemaName);
     dbMetadataCache.delete(cacheKey);
+    
+    // 加载Schema列表
+    await loadSourceSchemas();
+  }
+};
+
+// 目标数据库改变时的处理
+const handleTargetConnectionChange = async () => {
+  // 清空相关数据
+  formData.targetSchemaName = "";
+  targetSchemaList.value = [];
+
+  // 加载Schema列表
+  if (formData.targetConnectionId) {
+    await loadTargetSchemas();
   }
 };
 
@@ -428,9 +558,18 @@ const handleAdd = () => {
 };
 
 // 编辑任务
-const handleEdit = (row: SyncTask) => {
+const handleEdit = async (row: SyncTask) => {
   isEdit.value = true;
   Object.assign(formData, row);
+  
+  // 加载Schema列表
+  if (formData.sourceConnectionId) {
+    await loadSourceSchemas();
+  }
+  if (formData.targetConnectionId) {
+    await loadTargetSchemas();
+  }
+  
   dialogVisible.value = true;
 };
 
@@ -604,6 +743,8 @@ const resetForm = () => {
     status: 'PENDING'
   });
   sourceTableList.value = [];
+  sourceSchemaList.value = [];
+  targetSchemaList.value = [];
   formRef.value?.clearValidate();
 };
 
@@ -656,5 +797,136 @@ onUnmounted(() => {
   margin: 0;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+/* Transfer 容器样式，确保有足够空间显示 */
+.transfer-container {
+  overflow-x: auto;
+  padding: 10px 0;
+}
+
+/* Transfer 组件表名显示优化 */
+.table-transfer .transfer-item-label {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* 为了提高可读性，为transfer列表项添加鼠标悬停效果 */
+.table-transfer :deep(.el-transfer-panel__item) {
+  transition: background-color 0.2s ease;
+}
+
+.table-transfer :deep(.el-transfer-panel__item:hover) {
+  background-color: #f5f7fa;
+}
+
+/* 优化transfer面板的宽度和高度 */
+.table-transfer :deep(.el-transfer-panel) {
+  width: 280px;
+  height: 320px;
+}
+
+.table-transfer :deep(.el-transfer-panel__body) {
+  height: 260px;
+}
+
+.table-transfer :deep(.el-transfer-panel__list) {
+  height: 230px;
+}
+
+/* 优化transfer中间按钮为垂直排列，节省水平空间 */
+.table-transfer :deep(.el-transfer__buttons) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  min-width: 60px;
+}
+
+/* 优化按钮样式 */
+.table-transfer :deep(.el-transfer__button) {
+  margin: 0;
+  width: 40px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 确俛transfer容器能够水平对齐，并在同一行显示 */
+.table-transfer :deep(.el-transfer) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex-wrap: nowrap;
+  width: 100%;
+  min-width: 620px; /* 确保最小宽度可以容纳两个面板和按钮 */
+}
+
+/* 响应式设计，在小屏幕上调整面板大小，但保持同一行 */
+@media (max-width: 768px) {
+  .table-transfer :deep(.el-transfer) {
+    min-width: 460px; /* 适应中等屏幕 */
+  }
+  
+  .table-transfer :deep(.el-transfer-panel) {
+    width: 180px;
+    height: 280px;
+  }
+  
+  .table-transfer :deep(.el-transfer-panel__body) {
+    height: 220px;
+  }
+  
+  .table-transfer :deep(.el-transfer-panel__list) {
+    height: 190px;
+  }
+  
+  .table-transfer :deep(.el-transfer__buttons) {
+    min-width: 50px;
+    padding: 0 12px;
+  }
+  
+  .table-transfer :deep(.el-transfer__button) {
+    width: 36px;
+    height: 28px;
+  }
+}
+
+/* 超小屏幕优化，在非常小的屏幕上也尽量保持同一行 */
+@media (max-width: 480px) {
+  .table-transfer :deep(.el-transfer) {
+    min-width: 380px; /* 适应手机屏幕 */
+  }
+  
+  .table-transfer :deep(.el-transfer-panel) {
+    width: 140px;
+    height: 250px;
+  }
+  
+  .table-transfer :deep(.el-transfer-panel__body) {
+    height: 190px;
+  }
+  
+  .table-transfer :deep(.el-transfer-panel__list) {
+    height: 160px;
+  }
+  
+  .table-transfer :deep(.el-transfer__buttons) {
+    min-width: 40px;
+    padding: 0 8px;
+  }
+  
+  .table-transfer :deep(.el-transfer__button) {
+    width: 32px;
+    height: 24px;
+    font-size: 12px;
+  }
 }
 </style>

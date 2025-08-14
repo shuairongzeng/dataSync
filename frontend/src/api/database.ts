@@ -332,4 +332,64 @@ export const getBatchTableStatsApi = (connectionId: string, data: {
   });
 };
 
+// ================ SQL脚本执行API ================
+
+/** 脚本执行请求类型 */
+export interface ScriptExecutionRequest {
+  script: string;
+  schema?: string;
+  executeInTransaction?: boolean;
+}
+
+/** 脚本解析请求类型 */
+export interface ScriptParseRequest {
+  script: string;
+  dbType: string;
+}
+
+/** 语句执行结果类型 */
+export interface StatementResult {
+  statement: {
+    sql: string;
+    type: string;
+    category: string;
+    startLine: number;
+    endLine: number;
+  };
+  success: boolean;
+  message: string;
+  affectedRows: number;
+  executionTime: number;
+  lineNumber: number;
+  statementPreview: string;
+}
+
+/** 脚本执行结果类型 */
+export interface ScriptExecutionResult {
+  success: boolean;
+  message: string;
+  totalCount: number;
+  successCount: number;
+  failedCount: number;
+  totalTime: number;
+  statementResults: StatementResult[];
+  timestamp: number;
+}
+
+/** 执行SQL脚本 */
+export const executeScriptApi = (connectionId: string, data: ScriptExecutionRequest) => {
+  return http.request<ScriptExecutionResult>("post", `/api/database/connections/${connectionId}/script/execute`, {
+    data,
+    timeout: 600000 // 10 分钟超时，脚本执行可能需要较长时间
+  });
+};
+
+/** 解析SQL脚本（不执行） */
+export const parseScriptApi = (data: ScriptParseRequest) => {
+  return http.request<any>("post", `/api/database/script/parse`, {
+    data,
+    timeout: 30000 // 30 秒超时，解析速度较快
+  });
+};
+
 
